@@ -52,36 +52,107 @@ const defaultFeatureFlags = {
 const fullFeatureFlags = (featureFlags) => ({ ...defaultFeatureFlags, ...(featureFlags || {}) });
 
 superAdminRouter.get("/dashboard", asyncHandler(async (req, res) => {
-  const period = String(req.query.period || "month");
+  const period = String(req.query.period || "lifetime").toLowerCase();
   const now = new Date();
-  const start = new Date(now);
+  let startDate = null;
+  let endDate = null;
+
   if (period === "today") {
-    start.setHours(0, 0, 0, 0);
+    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  } else if (period === "month") {
+    startDate = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
   } else if (period === "year") {
-    start.setMonth(0, 1);
-    start.setHours(0, 0, 0, 0);
+    startDate = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+    endDate = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999);
+  } else if (period === "custom") {
+    if (req.query.dateFrom) {
+      const parts = req.query.dateFrom.split("-");
+      startDate = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 0, 0, 0, 0);
+    }
+    if (req.query.dateTo) {
+      const parts = req.query.dateTo.split("-");
+      endDate = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 23, 59, 59, 999);
+    }
   } else {
-    start.setDate(1);
-    start.setHours(0, 0, 0, 0);
+    // "lifetime"
+    startDate = null;
+    endDate = null;
   }
 
-  const [totalSalons, activeSalons, trialSalons, expiredSalons, suspendedSalons, demoLeadsCount, plans, subscriptions, recentSalons, recentPayments, supportTicketsCount] = await Promise.all([
-    prisma.salon.count(),
-    prisma.salon.count({ where: { status: "ACTIVE" } }),
-    prisma.salon.count({ where: { status: "TRIAL" } }),
-    prisma.salon.count({ where: { status: "EXPIRED" } }),
-    prisma.salon.count({ where: { status: "SUSPENDED" } }),
-    prisma.demoLead.count(),
+  const dateFilter = (startDate || endDate) ? {
+    ...(startDate ? { gte: startDate } : {}),
+    ...(endDate ? { lte: endDate } : {})
+  } : null;
+
+  const salonWhere = dateFilter ? { createdAt: dateFilter } : {};
+  const leadWhere = dateFilter ? { createdAt: dateFilter } : {};
+  const ticketWhere = dateFilter ? { createdAt: dateFilter } : {};
+
+  // Execute database queries
+  const [
+    totalSalons,
+    activeSalons,
+    trialSalons,
+    expiredSalons,
+    suspendedSalons,
+    demoLeadsCount,
+    activeDemoLeads,
+    convertedLeadsCount,
+    upcomingDemosCount,
+    supportTicketsCount,
+    urgentTickets,
+    pendingProductRequests,
+    pendingStaffRequests,
+    plans,
+    allSubscriptions,
+    recentSalons,
+    recentPayments,
+    recentLeads,
+    recentTickets,
+    recentActivityLogs
+  ] = await Promise.all([
+    prisma.salon.count({ where: salonWhere }),
+    prisma.salon.count({ where: { ...salonWhere, status: "ACTIVE" } }),
+    prisma.salon.count({ where: { ...salonWhere, status: "TRIAL" } }),
+    prisma.salon.count({ where: { ...salonWhere, status: "EXPIRED" } }),
+    prisma.salon.count({ where: { status: "SUSPENDED" } }), // Attention item: always show current suspended
+    prisma.demoLead.count({ where: leadWhere }),
+    prisma.demoLead.count({ where: { ...leadWhere, status: { notIn: ["CONVERTED", "LOST"] } } }),
+    prisma.demoLead.count({ where: { ...leadWhere, status: "CONVERTED" } }),
+    prisma.demoLead.count({ where: { ...leadWhere, status: "DEMO_SCHEDULED" } }),
+    prisma.supportTicket.count({ where: ticketWhere }),
+    prisma.supportTicket.findMany({ where: { status: "OPEN", priority: "URGENT" }, take: 5, include: { salon: true } }),
+    prisma.productRequirement.count({ where: { status: "OPEN" } }),
+    prisma.staffRequirement.count({ where: { status: "OPEN" } }),
     prisma.plan.findMany(),
     prisma.subscription.findMany({ include: { plan: true, salon: true } }),
-    prisma.salon.findMany({ take: 5, orderBy: { createdAt: "desc" } }),
-    prisma.payment.findMany({ where: { createdAt: { gte: start } }, take: 5, orderBy: { createdAt: "desc" } }),
-    prisma.supportTicket.count()
+    prisma.salon.findMany({ where: salonWhere, take: 5, orderBy: { createdAt: "desc" } }),
+    prisma.payment.findMany({ where: dateFilter ? { createdAt: dateFilter } : {}, take: 5, orderBy: { createdAt: "desc" } }),
+    prisma.demoLead.findMany({ where: leadWhere, take: 5, orderBy: { createdAt: "desc" } }),
+    prisma.supportTicket.findMany({ where: ticketWhere, take: 5, orderBy: { createdAt: "desc" }, include: { salon: true } }),
+    prisma.auditLog.findMany({ take: 8, orderBy: { createdAt: "desc" } }).catch(() => [])
   ]);
 
-  const totalSubscriptionRevenue = subscriptions.reduce((sum, sub) => sum + Math.max(0, toAmount(sub.plan?.monthlyPrice || 0) - toAmount(sub.manualDiscount || 0)), 0);
-  const monthlySubscriptionRevenue = subscriptions
-    .filter((sub) => new Date(sub.startsAt) >= start)
+  // Calculate Revenue
+  // If period is filtered, calculate revenue collected for subscriptions started/paid in this period
+  const subsInPeriod = dateFilter ? allSubscriptions.filter(s => {
+    const d = new Date(s.startsAt || s.convertedAt || s.createdAt);
+    return (!startDate || d >= startDate) && (!endDate || d <= endDate);
+  }) : allSubscriptions;
+
+  const totalSubscriptionRevenue = subsInPeriod.reduce((sum, sub) => {
+    return sum + Math.max(0, toAmount(sub.plan?.monthlyPrice || 0) - toAmount(sub.manualDiscount || 0));
+  }, 0);
+
+  // MRR: Monthly recurring value of currently active subscriptions
+  const monthlySubscriptionRevenue = allSubscriptions
+    .filter(sub => sub.status === "ACTIVE")
+    .reduce((sum, sub) => sum + Math.max(0, toAmount(sub.plan?.monthlyPrice || 0) - toAmount(sub.manualDiscount || 0)), 0);
+
+  const pendingSubscriptionRevenue = allSubscriptions
+    .filter(sub => sub.paymentStatus === "PENDING")
     .reduce((sum, sub) => sum + Math.max(0, toAmount(sub.plan?.monthlyPrice || 0) - toAmount(sub.manualDiscount || 0)), 0);
 
   const activePlansSummary = plans.map((plan) => ({
@@ -90,7 +161,37 @@ superAdminRouter.get("/dashboard", asyncHandler(async (req, res) => {
     monthlyPrice: Number(plan.monthlyPrice),
     yearlyPrice: Number(plan.yearlyPrice)
   }));
-  const expiredSubscriptionsSummary = subscriptions.filter((sub) => sub.status === "EXPIRED").length;
+
+  const activeSubCount = allSubscriptions.filter(s => s.status === "ACTIVE").length;
+  const trialSubCount = allSubscriptions.filter(s => s.status === "TRIAL").length;
+  const expiredSubCount = allSubscriptions.filter(s => s.status === "EXPIRED").length;
+  const expiringSubCount = allSubscriptions.filter(s => {
+    if (s.status !== "ACTIVE") return false;
+    const diffDays = (new Date(s.endsAt).getTime() - Date.now()) / (1000 * 3600 * 24);
+    return diffDays >= 0 && diffDays <= 7;
+  }).length;
+
+  const pendingPaymentsList = allSubscriptions
+    .filter(s => s.paymentStatus === "PENDING")
+    .slice(0, 5)
+    .map(s => ({
+      id: s.id,
+      salon: s.salon,
+      amount: Math.max(0, toAmount(s.plan?.monthlyPrice || 0) - toAmount(s.manualDiscount || 0))
+    }));
+
+  const expiringSalonsList = allSubscriptions
+    .filter(s => {
+      if (s.status !== "ACTIVE") return false;
+      const diffDays = (new Date(s.endsAt).getTime() - Date.now()) / (1000 * 3600 * 24);
+      return diffDays >= 0 && diffDays <= 7;
+    })
+    .slice(0, 5)
+    .map(s => ({
+      salonId: s.salonId,
+      salonName: s.salon?.name || "Salon",
+      endsAt: s.endsAt
+    }));
 
   res.json({
     totalSalons,
@@ -99,15 +200,39 @@ superAdminRouter.get("/dashboard", asyncHandler(async (req, res) => {
     expiredSalons,
     suspendedSalons,
     demoLeadsCount,
+    activeDemoLeads,
+    convertedLeadsCount,
+    upcomingDemosCount,
     plansCount: plans.length,
     totalSubscriptionRevenue,
     monthlySubscriptionRevenue,
+    pendingSubscriptionRevenue,
     supportTicketsCount,
+    pendingProductRequests,
+    pendingStaffRequests,
     activePlansSummary,
-    expiredSubscriptionsSummary,
+    expiredSubscriptionsSummary: expiredSubCount,
+    subscriptionStatusSummary: {
+      active: activeSubCount,
+      trial: trialSubCount,
+      expiring: expiringSubCount,
+      expired: expiredSubCount
+    },
+    attentionRequired: {
+      urgentTickets: urgentTickets.map(t => ({ id: t.id, subject: t.subject, salonName: t.salon?.name })),
+      suspendedCount: suspendedSalons,
+      pendingProductRequests,
+      pendingStaffRequests,
+      pendingPayments: pendingPaymentsList,
+      expiringSalons: expiringSalonsList
+    },
     recentSalons,
     recentPayments,
-    period
+    recentLeads,
+    recentTickets,
+    recentActivity: recentActivityLogs,
+    period,
+    dateRange: { startDate, endDate }
   });
 }));
 

@@ -8,23 +8,17 @@ import { sendMail } from "../../lib/mailer.js";
 import { defaultOwnerPermissions } from "../../lib/permissions.js";
 import { runExpiredDemoCleanup } from "../../lib/trialCleanup.js";
 
+
 export const authRouter = Router();
 
 authRouter.post("/verify-security-pin", async (req, res) => {
-  res.json({ success: true, token: "mock-token-after-pin" });
+  res.json({ success: true });
 });
+
 authRouter.post("/forgot-security-pin", async (req, res) => {
-  res.json({ success: true, message: "OTP sent" });
+  res.json({ success: true, message: "PIN reset instructions sent" });
 });
-authRouter.post("/verify-otp", async (req, res) => {
-  res.json({ success: true, message: "OTP verified" });
-});
-authRouter.post("/switch-salon", async (req, res) => {
-  res.json({ success: true, token: "mock-token-switch" });
-});
-authRouter.post("/resend-otp", async (req, res) => {
-  res.json({ success: true, message: "OTP resent" });
-});
+
 
 
 const membershipPriority = {
@@ -117,6 +111,7 @@ const createAuthResponse = async (user) => {
       accessToken,
       refreshToken,
       user: { id: user.id, name: user.name, systemRole: user.systemRole },
+      activeMemberships: activeMemberships,
       membership: membership
         ? {
             salonId: membership.salonId,
@@ -303,6 +298,58 @@ authRouter.post("/refresh", async (req, res) => {
 });
 
 authRouter.post("/logout", async (req, res) => res.json({ ok: true }));
+
+authRouter.post("/switch-salon", async (req, res) => {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  if (!token) return res.status(401).json({ message: "Authentication required" });
+
+  let decoded;
+  try {
+    decoded = verifyAccessToken(token);
+  } catch {
+    return res.status(401).json({ message: "Invalid or expired token" });
+  }
+
+  const { salonId } = req.body;
+  if (!salonId) return res.status(400).json({ message: "salonId is required" });
+
+  const user = await prisma.user.findUnique({
+    where: { id: decoded.userId },
+    include: {
+      memberships: {
+        include: {
+          salon: {
+            select: { id: true, name: true, slug: true, status: true, featureFlags: true }
+          }
+        }
+      }
+    }
+  });
+
+  if (!user || !user.isActive) return res.status(401).json({ message: "Invalid user" });
+
+  const activeMemberships = sortMemberships(
+    (user.memberships || []).filter((m) => m?.salon?.status !== "SUSPENDED")
+  );
+
+  const targetMembership = activeMemberships.find((m) => m.salonId === salonId);
+  if (!targetMembership && user.systemRole !== "SUPER_ADMIN") {
+    return res.status(403).json({ message: "You do not have access to this salon" });
+  }
+
+  const newAccessToken = signAccessToken({ userId: user.id, salonId });
+  const newRefreshToken = signRefreshToken({ userId: user.id, salonId });
+
+  return res.json({
+    accessToken: newAccessToken,
+    refreshToken: newRefreshToken,
+    salonId,
+    membership: targetMembership,
+    activeMemberships
+  });
+});
+
 
 authRouter.get("/me", async (req, res) => {
   const header = req.headers.authorization || "";

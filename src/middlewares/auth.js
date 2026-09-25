@@ -23,8 +23,8 @@ export const authMiddleware = async (req, res, next) => {
     if (!user || !user.isActive) return res.status(401).json({ message: "Invalid user" });
 
     const membership = decoded.salonId
-      ? user.memberships.find((m) => m.salonId === decoded.salonId)
-      : null;
+      ? (user.memberships.find((m) => m.salonId === decoded.salonId) || user.memberships[0] || null)
+      : (user.memberships[0] || null);
     // Fix: customer profile must match the requested salon (or any salon if no salonId in token).
     // Previous parenthesisation was ambiguous due to JS ternary precedence with `&&`.
     const customerProfile = user.systemRole === "CUSTOMER"
