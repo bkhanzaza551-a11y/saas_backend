@@ -1,38 +1,45 @@
 import jwt from "jsonwebtoken";
 
-const tokenBlacklist = new Set();
-const BLACKLIST_CLEANUP_INTERVAL = 60 * 60 * 1000;
+const BLACKLIST = new Set();
+const BLACKLIST_CLEANUP_INTERVAL = 1000 * 60 * 60; // 1 hour
 
-const cleanupBlacklist = () => {
-  const now = Math.floor(Date.now() / 1000);
-  for (const token of tokenBlacklist) {
+setInterval(() => {
+  const now = Date.now();
+  for (const item of BLACKLIST) {
     try {
-      const decoded = jwt.decode(token);
-      if (decoded?.exp && decoded.exp < now) tokenBlacklist.delete(token);
-    } catch { tokenBlacklist.delete(token); }
+      const decoded = jwt.decode(item);
+      if (decoded && decoded.exp * 1000 < now) {
+        BLACKLIST.delete(item);
+      }
+    } catch {
+      BLACKLIST.delete(item);
+    }
   }
-};
-setInterval(cleanupBlacklist, BLACKLIST_CLEANUP_INTERVAL);
+}, BLACKLIST_CLEANUP_INTERVAL);
 
-export const revokeToken = (token) => tokenBlacklist.add(token);
-export const isTokenRevoked = (token) => tokenBlacklist.has(token);
-
-export const signAccessToken = (payload, options) => jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: options?.expiresIn || "1h" });
-export const signRefreshToken = (payload, options) => jwt.sign(payload, process.env.JWT_REFRESH_SECRET, { expiresIn: options?.expiresIn || "7d" });
+export const signAccessToken = (payload, options) => jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: options?.expiresIn || "7d" });
+export const signRefreshToken = (payload, options) => jwt.sign(payload, process.env.JWT_REFRESH_SECRET, { expiresIn: options?.expiresIn || "30d" });
 export const signLoginAccessToken = (payload, options) => jwt.sign({ ...payload, purpose: "DEMO_LOGIN" }, process.env.JWT_SECRET, { expiresIn: options?.expiresIn || "30d" });
+
 export const verifyAccessToken = (token) => {
-  if (isTokenRevoked(token)) throw new Error("Token has been revoked");
+  if (BLACKLIST.has(token)) throw new Error("Token revoked");
   const decoded = jwt.verify(token, process.env.JWT_SECRET);
-  if (decoded?.purpose === "DEMO_LOGIN") throw new Error("Invalid token purpose");
+  if (decoded.purpose === "DEMO_LOGIN") throw new Error("Invalid token type");
   return decoded;
 };
+
 export const verifyRefreshToken = (token) => {
-  if (isTokenRevoked(token)) throw new Error("Refresh token has been revoked");
+  if (BLACKLIST.has(token)) throw new Error("Token revoked");
   return jwt.verify(token, process.env.JWT_REFRESH_SECRET);
 };
+
 export const verifyLoginAccessToken = (token) => {
-  if (isTokenRevoked(token)) throw new Error("Token has been revoked");
+  if (BLACKLIST.has(token)) throw new Error("Token revoked");
   const decoded = jwt.verify(token, process.env.JWT_SECRET);
-  if (decoded?.purpose !== "DEMO_LOGIN") throw new Error("Invalid login access token");
+  if (decoded.purpose !== "DEMO_LOGIN") throw new Error("Invalid token type");
   return decoded;
+};
+
+export const revokeToken = (token) => {
+  if (token) BLACKLIST.add(token);
 };
