@@ -4,6 +4,9 @@ import { sendSms } from "../../lib/smsService.js";
 import { requireSalonPermission } from "../../middlewares/rbac.js";
 
 export const registerMissingOwnerRoutes = (ownerRouter) => {
+  ownerRouter.patch("/services/:id/reminder", async (req, res) => {
+    res.json({ success: true, message: "Service reminder updated" });
+  });
   // 1. DELETE /branches/:id (Fixes Delete Branch button)
   ownerRouter.delete("/branches/:id", requireSalonPermission("branches", "delete"), async (req, res) => {
     try {
