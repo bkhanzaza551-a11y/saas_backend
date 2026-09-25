@@ -346,4 +346,64 @@ export const registerCommunicationRoutes = (ownerRouter) => {
       }
     }));
   });
+
+  // ==========================================
+  // Salon Owner Credits & Usage
+  // ==========================================
+
+  ownerRouter.get("/credits/balance", async (req, res) => {
+    const setting = await prisma.salonSetting.findFirst({ where: { salonId: req.salonId } });
+    const adv = setting?.advancedSettings || {};
+    res.json({
+      whatsappCredits: Number(adv.whatsappCredits || 0),
+      smsCredits: Number(adv.smsCredits || 0)
+    });
+  });
+
+  ownerRouter.get("/credits/packages", async (req, res) => {
+    const { type } = req.query || {};
+    const gs = await prisma.globalSetting.findFirst();
+    const defs = gs?.notificationDefaults || {};
+    let creditPackages = defs.creditPackages || [
+      { id: "pkg-wa-1000", name: "Starter WhatsApp", type: "WHATSAPP", credits: 1000, price: 999 },
+      { id: "pkg-wa-5000", name: "Growth WhatsApp", type: "WHATSAPP", credits: 5000, price: 3999 },
+      { id: "pkg-wa-10000", name: "Enterprise WhatsApp", type: "WHATSAPP", credits: 10000, price: 6999 },
+      { id: "pkg-sms-1000", name: "Basic SMS", type: "SMS", credits: 1000, price: 499 },
+      { id: "pkg-sms-5000", name: "Pro SMS", type: "SMS", credits: 5000, price: 1999 },
+      { id: "pkg-sms-10000", name: "Bulk SMS", type: "SMS", credits: 10000, price: 3499 }
+    ];
+    if (type) {
+      creditPackages = creditPackages.filter(p => String(p.type).toUpperCase() === String(type).toUpperCase());
+    }
+    res.json(creditPackages);
+  });
+
+  ownerRouter.get("/credits/transactions", async (req, res) => {
+    const { type } = req.query || {};
+    const logs = await prisma.auditLog.findMany({
+      where: { salonId: req.salonId, module: "CREDITS" },
+      orderBy: { createdAt: "desc" },
+      take: 50
+    });
+    let txs = logs.map(l => {
+      const meta = l.metadata || {};
+      return {
+        id: l.id,
+        packageName: meta.packageName || "MANUAL_ADD",
+        creditsAdded: Number(meta.creditsToAdd || meta.credits || 0),
+        amountPaidPaise: Number(meta.amount || 0) * 100,
+        status: "COMPLETED",
+        type: meta.creditType || "WHATSAPP",
+        createdAt: l.createdAt
+      };
+    });
+    if (type) {
+      txs = txs.filter(t => String(t.type).toUpperCase() === String(type).toUpperCase());
+    }
+    res.json(txs);
+  });
+
+  ownerRouter.get("/credits/sms-usage", async (req, res) => {
+    res.json({ logs: [], stats: { totalCreditsUsed: 0, totalSent: 0, totalFailed: 0, total: 0 } });
+  });
 };

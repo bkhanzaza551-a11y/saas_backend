@@ -2127,3 +2127,264 @@ superAdminRouter.post("/finance/record-payment", asyncHandler(async (req, res) =
 
   res.status(201).json({ success: true, transactionId: txnId, log });
 }));
+
+// ==========================================
+// SuperAdmin Credit Hub Endpoints
+// ==========================================
+
+const getGlobalCreditConfig = async () => {
+  const gs = await prisma.globalSetting.findFirst();
+  const defs = gs?.notificationDefaults || {};
+  const creditPackages = defs.creditPackages || [
+    { id: "pkg-wa-1000", name: "Starter WhatsApp", type: "WHATSAPP", credits: 1000, price: 999 },
+    { id: "pkg-wa-5000", name: "Growth WhatsApp", type: "WHATSAPP", credits: 5000, price: 3999 },
+    { id: "pkg-wa-10000", name: "Enterprise WhatsApp", type: "WHATSAPP", credits: 10000, price: 6999 },
+    { id: "pkg-sms-1000", name: "Basic SMS", type: "SMS", credits: 1000, price: 499 },
+    { id: "pkg-sms-5000", name: "Pro SMS", type: "SMS", credits: 5000, price: 1999 },
+    { id: "pkg-sms-10000", name: "Bulk SMS", type: "SMS", credits: 10000, price: 3499 }
+  ];
+  const creditCosts = defs.creditCosts || { whatsappCreditCost: 1, smsCreditCost: 1 };
+  return { gs, creditPackages, creditCosts };
+};
+
+// 1. Get credit salons
+superAdminRouter.get("/credits/salons", asyncHandler(async (req, res) => {
+  const salons = await prisma.salon.findMany({
+    orderBy: { name: "asc" },
+    include: {
+      settings: { take: 1 }
+    }
+  });
+
+  const result = salons.map((s) => {
+    const adv = s.settings?.[0]?.advancedSettings || {};
+    return {
+      id: s.id,
+      name: s.name,
+      email: s.email,
+      whatsappCredits: Number(adv.whatsappCredits || 0),
+      smsCredits: Number(adv.smsCredits || 0),
+      customWhatsappEnabled: Boolean(adv.customWhatsappEnabled),
+      customWhatsappToken: adv.customWhatsappToken || "",
+      customWhatsappPhoneId: adv.customWhatsappPhoneId || "",
+      customWhatsappAccountId: adv.customWhatsappAccountId || ""
+    };
+  });
+
+  res.json(result);
+}));
+
+// 2. Get packages
+superAdminRouter.get("/credits/packages", asyncHandler(async (req, res) => {
+  const { type } = req.query || {};
+  const { creditPackages } = await getGlobalCreditConfig();
+
+  let pkgs = creditPackages;
+  if (type) {
+    pkgs = pkgs.filter((p) => String(p.type).toUpperCase() === String(type).toUpperCase());
+  }
+  res.json(pkgs);
+}));
+
+// 3. Create package
+superAdminRouter.post("/credits/packages", asyncHandler(async (req, res) => {
+  const { name, credits, price, type } = req.body || {};
+  if (!name || !credits || !price || !type) {
+    return res.status(400).json({ message: "Name, credits, price, and type are required" });
+  }
+
+  const { gs, creditPackages } = await getGlobalCreditConfig();
+  const newPkg = {
+    id: `pkg-${type.toLowerCase()}-${Date.now().toString().slice(-6)}`,
+    name: String(name).trim(),
+    credits: Number(credits),
+    price: Number(price),
+    type: String(type).toUpperCase()
+  };
+
+  const updatedPkgs = [...creditPackages, newPkg];
+  if (gs) {
+    await prisma.globalSetting.update({
+      where: { id: gs.id },
+      data: {
+        notificationDefaults: {
+          ...(gs.notificationDefaults || {}),
+          creditPackages: updatedPkgs
+        }
+      }
+    });
+  }
+
+  res.status(201).json(newPkg);
+}));
+
+// 4. Update package
+superAdminRouter.patch("/credits/packages/:id", asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { name, credits, price, type } = req.body || {};
+
+  const { gs, creditPackages } = await getGlobalCreditConfig();
+  const idx = creditPackages.findIndex((p) => p.id === id);
+  if (idx === -1) return res.status(404).json({ message: "Package not found" });
+
+  creditPackages[idx] = {
+    ...creditPackages[idx],
+    ...(name ? { name: String(name).trim() } : {}),
+    ...(credits !== undefined ? { credits: Number(credits) } : {}),
+    ...(price !== undefined ? { price: Number(price) } : {}),
+    ...(type ? { type: String(type).toUpperCase() } : {})
+  };
+
+  if (gs) {
+    await prisma.globalSetting.update({
+      where: { id: gs.id },
+      data: {
+        notificationDefaults: {
+          ...(gs.notificationDefaults || {}),
+          creditPackages
+        }
+      }
+    });
+  }
+
+  res.json(creditPackages[idx]);
+}));
+
+// 5. Get costs
+superAdminRouter.get("/credits/costs", asyncHandler(async (req, res) => {
+  const { creditCosts } = await getGlobalCreditConfig();
+  res.json(creditCosts);
+}));
+
+// 6. Update costs
+superAdminRouter.post("/credits/costs", asyncHandler(async (req, res) => {
+  const { whatsappCreditCost = 1, smsCreditCost = 1 } = req.body || {};
+  const { gs } = await getGlobalCreditConfig();
+
+  const newCosts = {
+    whatsappCreditCost: Number(whatsappCreditCost),
+    smsCreditCost: Number(smsCreditCost)
+  };
+
+  if (gs) {
+    await prisma.globalSetting.update({
+      where: { id: gs.id },
+      data: {
+        notificationDefaults: {
+          ...(gs.notificationDefaults || {}),
+          creditCosts: newCosts
+        }
+      }
+    });
+  }
+
+  res.json(newCosts);
+}));
+
+// 7. Add credits manually to salon
+superAdminRouter.post("/credits/add-credits", asyncHandler(async (req, res) => {
+  const { salonId, creditsToAdd, reason, creditType = "WHATSAPP" } = req.body || {};
+  if (!salonId || creditsToAdd === undefined) {
+    return res.status(400).json({ message: "Salon ID and credits to add are required" });
+  }
+
+  const salon = await prisma.salon.findUnique({ where: { id: salonId } });
+  if (!salon) return res.status(404).json({ message: "Salon not found" });
+
+  const setting = await prisma.salonSetting.findFirst({ where: { salonId } });
+  const adv = setting?.advancedSettings || {};
+  const key = String(creditType).toUpperCase() === "SMS" ? "smsCredits" : "whatsappCredits";
+  const currentCredits = Number(adv[key] || 0);
+  const newBalance = Math.max(0, currentCredits + Number(creditsToAdd));
+  adv[key] = newBalance;
+
+  if (setting) {
+    await prisma.salonSetting.update({
+      where: { id: setting.id },
+      data: { advancedSettings: adv }
+    });
+  } else {
+    await prisma.salonSetting.create({
+      data: { salonId, advancedSettings: adv }
+    });
+  }
+
+  // Audit log
+  await prisma.auditLog.create({
+    data: {
+      salonId,
+      actorUserId: req.user?.id || null,
+      module: "CREDITS",
+      action: "CREDITS_ADJUSTED",
+      entityType: "CreditBalance",
+      entityId: salonId,
+      summary: `${Number(creditsToAdd) >= 0 ? "Added" : "Deducted"} ${Math.abs(Number(creditsToAdd))} ${creditType} credits (${reason || "Manual adjustment"}). Balance: ${newBalance}`,
+      metadata: {
+        salonId,
+        salonName: salon.name,
+        creditsToAdd: Number(creditsToAdd),
+        creditType: String(creditType).toUpperCase(),
+        reason: reason || "Manual adjustment",
+        packageName: "MANUAL_ADD",
+        amount: 0,
+        newBalance
+      }
+    }
+  });
+
+  res.json({ success: true, balance: newBalance });
+}));
+
+// 8. Credit transactions
+superAdminRouter.get("/credits/transactions", asyncHandler(async (req, res) => {
+  const creditLogs = await prisma.auditLog.findMany({
+    where: { module: "CREDITS" },
+    orderBy: { createdAt: "desc" },
+    take: 100
+  });
+
+  const allSalons = await prisma.salon.findMany({ select: { id: true, name: true } });
+  const salonLookup = Object.fromEntries(allSalons.map((s) => [s.id, s.name]));
+
+  const txs = creditLogs.map((log) => {
+    const meta = log.metadata || {};
+    return {
+      id: log.id,
+      salonId: log.salonId,
+      salonName: meta.salonName || salonLookup[log.salonId] || "Salon",
+      packageName: meta.packageName || "MANUAL_ADD",
+      creditsAdded: Number(meta.creditsToAdd || meta.credits || 0),
+      amountPaidPaise: Number(meta.amount || 0) * 100,
+      status: "COMPLETED",
+      type: meta.creditType || "WHATSAPP",
+      createdAt: log.createdAt
+    };
+  });
+
+  res.json(txs);
+}));
+
+// 9. Configure custom WhatsApp API for salon
+superAdminRouter.put("/credits/salons/:id/whatsapp-api", asyncHandler(async (req, res) => {
+  const { customWhatsappEnabled, customWhatsappToken, customWhatsappPhoneId, customWhatsappAccountId } = req.body || {};
+
+  const setting = await prisma.salonSetting.findFirst({ where: { salonId: req.params.id } });
+  const adv = setting?.advancedSettings || {};
+  adv.customWhatsappEnabled = Boolean(customWhatsappEnabled);
+  adv.customWhatsappToken = customWhatsappToken || "";
+  adv.customWhatsappPhoneId = customWhatsappPhoneId || "";
+  adv.customWhatsappAccountId = customWhatsappAccountId || "";
+
+  if (setting) {
+    await prisma.salonSetting.update({
+      where: { id: setting.id },
+      data: { advancedSettings: adv }
+    });
+  } else {
+    await prisma.salonSetting.create({
+      data: { salonId: req.params.id, advancedSettings: adv }
+    });
+  }
+
+  res.json({ success: true, customWhatsappEnabled: Boolean(customWhatsappEnabled) });
+}));
