@@ -507,6 +507,18 @@ ownerRouter.get("/branches", requireSalonPermission("branches", "view"), async (
   });
   res.json(rows);
 });
+
+ownerRouter.get("/branches/limit-info", requireSalonPermission("branches", "view"), async (req, res) => {
+  const count = await prisma.branch.count({ where: { salonId: req.salonId, isActive: true } });
+  const subscription = await prisma.subscription.findFirst({
+    where: { salonId: req.salonId, status: "ACTIVE" },
+    include: { plan: true }
+  });
+  const branchLimit = subscription?.plan?.maxBranches || subscription?.plan?.limits?.maxBranches || 999;
+  res.json({ count, limit: branchLimit, canAdd: count < branchLimit });
+});
+
+
 ownerRouter.post("/branches", requireSalonPermission("branches", "create"), validate(schemas.branch), async (req, res) => {
   try {
     res.status(201).json(await prisma.branch.create({ data: { ...req.body, email: req.body.email || null, salonId: req.salonId } }));
@@ -2926,6 +2938,18 @@ ownerRouter.get("/products", async (req, res) => {
     orderBy: { name: "asc" }
   });
   res.json(products);
+});
+
+ownerRouter.get("/product-catalog", async (req, res) => {
+  try {
+    const catalog = await prisma.productRequirement.findMany({
+      where: { salonId: null },
+      orderBy: { createdAt: "desc" }
+    });
+    res.json(catalog);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to load product catalog" });
+  }
 });
 
 ownerRouter.get("/product-requirements", async (req, res) => {
