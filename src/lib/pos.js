@@ -282,7 +282,7 @@ export const createPosInvoice = async ({ salonId, actorUser, body }) => {
         });
         if (item.customServices && item.customServices.length > 0) {
           await prisma.membershipPlanService.createMany({
-            data: item.customServices.map(sid => ({ membershipPlanId: plan.id, serviceId: sid }))
+            data: item.customServices.map(sid => ({ membershipPlanId: plan.id, serviceId: typeof sid === 'string' ? sid : (sid.id || sid.serviceId) }))
           });
         }
       } else {
@@ -323,7 +323,7 @@ export const createPosInvoice = async ({ salonId, actorUser, body }) => {
         });
         if (item.customServices && item.customServices.length > 0) {
           await prisma.packageService.createMany({
-            data: item.customServices.map(sid => ({ packageId: pack.id, serviceId: sid }))
+            data: item.customServices.map(sid => ({ packageId: pack.id, serviceId: typeof sid === 'string' ? sid : (sid.id || sid.serviceId), sessions: typeof sid === 'object' ? Number(sid.qty || sid.sessions || 1) : 1 }))
           });
         }
       } else {
