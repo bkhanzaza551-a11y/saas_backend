@@ -49,6 +49,32 @@ export const registerEnquiryRoutes = (ownerRouter) => {
         notes: req.body.notes || null
       }
     });
+
+    // Auto-sync customer database so lead is automatically present in customers table
+    if (row.phone) {
+      try {
+        const cleanPhone = String(row.phone).trim();
+        const existingCustomer = await prisma.customer.findFirst({
+          where: { salonId: req.salonId, phone: cleanPhone }
+        });
+        if (!existingCustomer) {
+          await prisma.customer.create({
+            data: {
+              salonId: req.salonId,
+              name: row.name?.trim() || "Walk-in Lead",
+              phone: cleanPhone,
+              email: row.email?.trim() || null,
+              gender: "OTHER",
+              source: row.source || "WALK_IN",
+              notes: row.notes || "Auto-created from Enquiry"
+            }
+          });
+        }
+      } catch (err) {
+        console.warn("Auto-sync customer warning:", err.message);
+      }
+    }
+
     if (row.followUpAt) {
       await createStaffNotification({
         salonId: req.salonId,
