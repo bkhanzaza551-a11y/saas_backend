@@ -68,6 +68,11 @@ export const registerAdvancedReportRoutes = (ownerRouter) => {
 
 
 
+  
+  ownerRouter.get("/reports/payroll", requireFeatureEnabled("payroll"), requireSalonPermission("payroll", "view"), async (req, res) => {
+    res.json([]);
+  });
+
   ownerRouter.get("/reports/tax", requireFeatureEnabled("advancedReports"), requireSalonPermission("advancedReports", "view"), async (req, res) => {
     const bs = branchScope(req);
     const invoices = await prisma.invoice.findMany({ where: { salonId: req.salonId, ...bs, status: { not: "CANCELLED" }, ...parseDateWhere(req.query) }, orderBy: { createdAt: "desc" } });

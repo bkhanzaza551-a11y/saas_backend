@@ -259,6 +259,8 @@ model User {
   passwordSetupRequired    Boolean              @default(false)
   isDemoAccount            Boolean              @default(false)
   pagePermissions          Json?
+  loginOtp                 String?
+  loginOtpExpiry           DateTime?
   createdAt             DateTime                     @default(now())
   updatedAt                DateTime             @updatedAt
   memberships              UserSalon[]
@@ -437,6 +439,7 @@ model Plan {
   invoiceLimit  Int            @default(1000)
   storageLimit  Int?
   isCustom      Boolean        @default(false)
+  isArchived  Boolean        @default(false)
   featureFlags  Json?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
@@ -473,6 +476,12 @@ model DemoLead {
   reviewedAt          DateTime?
   reviewedByName      String?
   reviewNote          String?
+  followUps           Json?
+  zohoMeeting         Json?
+  assignedUserId      String?
+  leadSource          String?
+  nextFollowUpAt      DateTime?
+  lostReason          String?
   inviteSentAt        DateTime?
   createdAt           DateTime             @default(now())
   salon               Salon?               @relation(fields: [salonId], references: [id])
@@ -1558,6 +1567,7 @@ model SupportTicket {
   description       String?
   internalNote      String?
   assignedAgentName String?
+  assignedToId      String?
   createdAt         DateTime               @default(now())
   updatedAt         DateTime               @updatedAt
   salon             Salon?                 @relation(fields: [salonId], references: [id])
@@ -2390,9 +2400,17 @@ model ProductRequirement {
   priority    String   @default("MEDIUM")
   status      String   @default("OPEN")
   vendor      String?
+  brand       String?
+  packSize    String?
+  availableQty Int     @default(0)
+  defaultPrice Float?
+  isActive    Boolean  @default(true)
+  notes       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   salon       Salon?   @relation(fields: [salonId], references: [id])
   branch      Branch?  @relation(fields: [branchId], references: [id])
 }
+
+
 

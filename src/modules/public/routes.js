@@ -277,6 +277,34 @@ publicRouter.post("/salon/:slug/track", asyncHandler(async (req, res) => {
 
 registerPublicPhase3Routes(publicRouter);
 
+
+publicRouter.get("/legal", asyncHandler(async (req, res) => {
+  try {
+    const slug = req.query.slug ? String(req.query.slug) : null;
+    let salonSettings = null;
+    if (slug) {
+      const salon = await prisma.salon.findUnique({ where: { slug }, include: { settings: { where: { branchId: null }, take: 1 } } });
+      salonSettings = salon?.settings?.[0] || null;
+    }
+    if (!salonSettings) {
+      const firstSetting = await prisma.salonSetting.findFirst({ where: { branchId: null }, orderBy: { createdAt: "asc" } });
+      salonSettings = firstSetting;
+    }
+    const legalContent = typeof salonSettings?.advancedSettings === "object"
+      ? salonSettings.advancedSettings?.legalContent || {}
+      : {};
+    const globalSettings = await prisma.globalSetting.findFirst();
+    res.json({
+      privacyPolicy: legalContent.privacyPolicy || "",
+      termsAndConditions: legalContent.termsAndConditions || "",
+      businessName: globalSettings?.systemName || "Skillify",
+      supportEmail: globalSettings?.supportEmail || globalSettings?.contactEmail || ""
+    });
+  } catch {
+    res.json({ privacyPolicy: "", termsAndConditions: "", businessName: "Skillify", supportEmail: "" });
+  }
+}));
+
 publicRouter.get("/plans", asyncHandler(async (req, res) => {
   const plans = await prisma.plan.findMany({ orderBy: { yearlyPrice: "asc" } });
   res.json(plans.length ? plans : [

@@ -147,18 +147,18 @@ const isValidPhone = (value) => {
   const raw = String(value ?? "").trim();
   if (!raw) return false;
   const digits = raw.replace(/\D/g, "");
-  return digits.length >= 10 && digits.length <= 15;
+  return digits.length === 10;
 };
 const indianPhoneSchema = z.string().trim()
-  .refine((value) => isValidPhone(value), "Enter a valid phone number (10-15 digits)");
+  .refine((value) => isValidPhone(value), "Enter a valid 10-digit phone number");
 const requiredIndianPhoneSchema = z.string().trim()
   .min(5, "Phone must be at least 5 characters")
-  .refine((value) => isValidPhone(value), "Enter a valid phone number (10-15 digits)");
+  .refine((value) => isValidPhone(value), "Enter a valid 10-digit phone number");
 const optionalIndianPhoneSchema = z.union([z.literal(""), indianPhoneSchema]).optional()
   .transform((value) => value || undefined);
 const vendorPhoneSchema = z.string().trim().refine(
   (value) => isValidPhone(value),
-  "Enter a valid phone number (10-15 digits)"
+  "Enter a valid 10-digit phone number"
 );
 const optionalVendorPhoneSchema = z.union([z.literal(""), vendorPhoneSchema]).optional()
   .transform((value) => value || undefined);
@@ -540,7 +540,7 @@ export const schemas = {
       reviewNote: z.string().optional()
     })
   }),
-  demoLeadReject: z.object({ body: z.object({ reviewNote: z.string().min(2) }) }),
+  demoLeadReject: z.object({ body: z.object({ reviewNote: z.string().optional(), lostReason: z.string().optional(), lostNotes: z.string().optional() }) }),
   supportTicket: z.object({ body: z.object({ title: z.string().min(2), category: z.string().optional(), priority: z.string().optional(), description: z.string().optional(), attachmentUrl: z.string().optional() }) }),
   supportTicketMessage: z.object({ body: z.object({ message: z.string().min(2), attachmentUrl: z.string().optional() }) }),
   salonSettings: z.object({ body: z.object({ invoicePrefix: z.string().optional(), invoiceFooter: z.string().optional(), taxLabel: z.string().optional(), paymentModes: z.any().optional(), whatsappNumber: optionalIndianPhoneSchema, bookingNotes: z.string().optional(), cancellationPolicy: z.string().optional(), branchId: z.string().nullable().optional(), paymentGatewaySettings: z.any().optional(), advancedSettings: z.any().optional(), smsSettings: z.any().optional(), allowNegativeStock: z.boolean().optional() }) }),
@@ -1163,13 +1163,13 @@ export const schemas = {
       name: z.string().min(2),
       phone: indianPhoneSchema,
       email: optionalEmailLike,
-      source: z.enum(["WEBSITE", "WHATSAPP", "PHONE", "WALK_IN", "INSTAGRAM", "FACEBOOK", "ADS", "REFERRAL"]),
+      source: z.enum(["WEBSITE", "WHATSAPP", "PHONE", "WALK_IN", "INSTAGRAM", "FACEBOOK", "ADS", "REFERRAL", "ONLINE", "OTHERS"]),
       interestedServiceId: z.string().nullable().optional(),
       interestedBranchId: z.string().nullable().optional(),
       budget: z.number().min(0).optional(),
       priority: optionalString,
       assignedToMembershipId: z.string().nullable().optional(),
-      followUpAt: optionalDateString,
+      followUpAt: requiredDateString,
       notes: optionalString
     })
   }),
