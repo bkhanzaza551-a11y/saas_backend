@@ -113,6 +113,52 @@ const gupshupSend = async ({ to, message, senderId }) => {
   }
 };
 
+/* ── SMSLogin ──────────────────────────────────────────────────────── */
+const smsloginSend = async ({ to, message, senderId }) => {
+  const apiKey = process.env.SMSLOGIN_API_KEY;
+  const sender = senderId || process.env.SMSLOGIN_SENDER_ID;
+  const username = process.env.SMSLOGIN_USERNAME || "";
+  const templateId = process.env.SMSLOGIN_TEMPLATE_ID;
+
+  if (!apiKey || !sender) {
+    throw new Error("SMSLogin credentials missing: set SMSLOGIN_API_KEY and SMSLOGIN_SENDER_ID");
+  }
+
+  const phone = String(to).replace(/[^\d]/g, "");
+  // Standard generic API endpoint - update SMSLOGIN_API_URL in env if different
+  const baseUrl = process.env.SMSLOGIN_API_URL || "https://smslogin.in/api/send_http.php";
+  
+  const params = new URLSearchParams({
+    authkey: apiKey, // Some portals use authkey, others apikey
+    apikey: apiKey,
+    username: username,
+    senderid: sender,
+    sender: sender,
+    mobiles: phone,
+    message: message,
+    route: "4" // typically transactional route
+  });
+
+  if (templateId) params.append("template_id", templateId);
+  if (templateId) params.append("DLT_TE_ID", templateId);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SMS_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${baseUrl}?${params}`, {
+      method: "GET",
+      signal: controller.signal
+    });
+    const data = await res.text();
+    if (!res.ok) throw new Error(`SMSLogin HTTP ${res.status}: ${data}`);
+    
+    return { success: true, provider: "smslogin", messageId: `smslogin_${Date.now()}`, rawResponse: data };
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 /* ── Stub (fallback) ───────────────────────────────────────────────── */
 const stubSend = async ({ to, message }) => {
   console.log(`[SMS STUB] would send to ${to}: ${message.slice(0, 80)}...`);
@@ -124,6 +170,7 @@ const providers = {
   twilio: { send: twilioSend },
   msg91: { send: msg91Send },
   gupshup: { send: gupshupSend },
+  smslogin: { send: smsloginSend },
   stub: { send: stubSend }
 };
 
