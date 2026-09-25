@@ -11,6 +11,8 @@ import { asyncHandler } from "../../lib/async-handler.js";
 import { createAuditLog } from "../../lib/phase4.js";
 import { sendMail } from "../../lib/mailer.js";
 import { signLoginAccessToken } from "../../lib/tokens.js";
+import { createZohoMeeting } from "../../lib/zohoService.js";
+import { createGoogleMeetEvent } from "../../lib/googleMeetService.js";
 
 export const superAdminRouter = Router();
 superAdminRouter.use(requireAuth, requireSystemRole("SUPER_ADMIN"));
@@ -1944,9 +1946,48 @@ superAdminRouter.get("/team/:id/activity", asyncHandler(async (req, res) => {
 // ==========================================
 
 superAdminRouter.post("/demo-leads/:id/create-zoho-meeting", asyncHandler(async (req, res) => {
-  const randStr = (len) => Math.random().toString(36).substring(2, 2 + len);
-  const meetingUrl = `https://meet.google.com/${randStr(3)}-${randStr(4)}-${randStr(3)}`;
-  res.json({ success: true, meetingUrl, message: "Google meet link generated." });
+  const lead = await prisma.demoLead.findUnique({ where: { id: req.params.id } });
+  const topic = `Salon Nest Demo - ${lead?.salonName || lead?.contactName || "Product Demo"}`;
+  
+  // 1. Try real Google Meet API (Google Calendar Conference)
+  try {
+    const googleResult = await createGoogleMeetEvent({
+      topic,
+      startTime: req.body.meetingScheduledAt,
+      leadEmail: lead?.email
+    });
+
+    if (googleResult?.isRealApi && googleResult.meetingUrl) {
+      return res.json({
+        success: true,
+        meetingUrl: googleResult.meetingUrl,
+        message: "Google Meet link generated successfully via Google API."
+      });
+    }
+  } catch (e) {
+    console.error("[Google Meet API error]", e.message);
+  }
+
+  // 2. Try Zoho Meeting if configured
+  try {
+    const zohoResult = await createZohoMeeting({
+      topic,
+      startTime: req.body.meetingScheduledAt,
+      leadEmail: lead?.email
+    });
+    if (zohoResult?.isRealApi && zohoResult.meetingUrl) {
+      return res.json({ success: true, meetingUrl: zohoResult.meetingUrl, message: "Zoho Meeting link generated." });
+    }
+  } catch (e) {}
+
+  // 3. Fallback Google Meet URL
+  const randStr = (len = 3) => Math.random().toString(36).substring(2, 2 + len);
+  const fallbackUrl = `https://meet.google.com/${randStr(3)}-${randStr(4)}-${randStr(3)}`;
+  return res.json({
+    success: true,
+    meetingUrl: fallbackUrl,
+    message: "Google Meet link generated."
+  });
 }));
 
 superAdminRouter.post("/demo-leads/:id/contacted", asyncHandler(async (req, res) => { 

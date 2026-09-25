@@ -65,96 +65,16 @@ authRouter.post("/register", validate(schemas.register), async (req, res) => {
   res.status(201).json({ id: user.id, email: user.email });
 });
 
-authRouter.post("/login", validate(schemas.login), async (req, res) => {
-  const { email, password, loginAccessToken } = req.body;
-  const cleanEmail = String(email || "").trim().toLowerCase();
-  const user = await prisma.user.findFirst({
-    where: { email: { equals: cleanEmail, mode: "insensitive" } },
-    include: {
-      memberships: {
-        include: {
-          salon: {
-            select: { id: true, status: true, featureFlags: true }
-          }
-        }
-      }
-    }
-  });
-  if (!user) return res.status(401).json({ message: "Invalid credentials" });
-  if (user.isActive === false) return res.status(403).json({ message: "User account is inactive" });
-  if (user.passwordSetupRequired) return res.status(403).json({ message: "Password setup is still pending." });
-
-  const ok = await bcrypt.compare(password, user.passwordHash);
-  if (!ok) return res.status(401).json({ message: "Invalid credentials" });
-
-  if (user.systemRole !== "SUPER_ADMIN") {
-    const globalSetting = await prisma.globalSetting.findFirst();
-    if (globalSetting?.maintenanceMode) {
-      return res.status(503).json({ message: "System is in maintenance mode" });
-    }
-  }
-
-  // --- OTP Logic ---
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
-
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { loginOtp: otp, loginOtpExpiry: otpExpiry }
-  });
-
-  // Send OTP to email
-  await sendMail({
-    to: user.email,
-    subject: "Your Login OTP",
-    text: `Your OTP for login is ${otp}. It is valid for 10 minutes.`,
-    html: `<p>Your OTP for login is <strong>${otp}</strong>.</p><p>It is valid for 10 minutes.</p>`
-  }).catch(e => console.error("OTP Email failed", e));
-
-  // Return requiring OTP
-  return res.json({ requireOtp: true, email: user.email, message: "OTP sent to your email" });
-});
-
-authRouter.post("/verify-otp", async (req, res) => {
-  const { email, otp } = req.body;
-  if (!email || !otp) return res.status(400).json({ message: "Email and OTP are required" });
-
-  const cleanEmail = String(email).trim().toLowerCase();
-  const user = await prisma.user.findFirst({
-    where: { email: { equals: cleanEmail, mode: "insensitive" } },
-    include: {
-      memberships: {
-        include: {
-          salon: {
-            select: { id: true, status: true, featureFlags: true }
-          }
-        }
-      }
-    }
-  });
-
-  if (!user) return res.status(400).json({ message: "Invalid request" });
-  
-  if (user.loginOtp !== String(otp) || !user.loginOtpExpiry || user.loginOtpExpiry < new Date()) {
-    return res.status(400).json({ message: "Invalid or expired OTP" });
-  }
-
-  // Clear OTP
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { loginOtp: null, loginOtpExpiry: null }
-  });
-
-  // Proceed with standard login token generation
+const createAuthResponse = async (user) => {
   const activeMemberships = sortMemberships((user.memberships || []).filter(m => m?.salon?.status !== "SUSPENDED"));
   const membership = activeMemberships[0] || null;
 
   if (membership?.salonId) {
-    await runExpiredDemoCleanup({ actorName: "LOGIN_CHECK", salonId: membership.salonId }).catch(()=>{});
+    await runExpiredDemoCleanup({ actorName: "LOGIN_CHECK", salonId: membership.salonId }).catch(() => {});
   }
 
   if (user.systemRole !== "SUPER_ADMIN" && !membership) {
-    return res.status(403).json({ message: "No active salon membership is linked to this email." });
+    return { errorStatus: 403, errorBody: { message: "No active salon membership is linked to this email." } };
   }
 
   const [salon, subscription] = membership
@@ -191,34 +111,154 @@ authRouter.post("/verify-otp", async (req, res) => {
         })())
     : null;
 
-  res.json({
-    accessToken,
-    refreshToken,
-    user: { id: user.id, name: user.name, systemRole: user.systemRole },
-    membership: membership
-      ? {
-          salonId: membership.salonId,
-          salonName: salon?.name || membership.salon?.name || null,
-          salonRole: membership.salonRole,
-          branchId: membership.branchId || null,
-          customRoleId: membership.customRoleId || null,
-          permissions: mergedPermissions || {},
-          featureFlags: mergedFeatureFlags,
-          plan: subscription?.plan
-            ? {
-                id: subscription.plan.id,
-                name: subscription.plan.name,
-                branchLimit: subscription.plan.branchLimit,
-                userLimit: subscription.plan.userLimit,
-                customerLimit: subscription.plan.customerLimit,
-                invoiceLimit: subscription.plan.invoiceLimit,
-                storageLimit: subscription.plan.storageLimit,
-                isCustom: subscription.plan.isCustom
-              }
-            : null
+  return {
+    success: true,
+    data: {
+      accessToken,
+      refreshToken,
+      user: { id: user.id, name: user.name, systemRole: user.systemRole },
+      membership: membership
+        ? {
+            salonId: membership.salonId,
+            salonName: salon?.name || membership.salon?.name || null,
+            salonRole: membership.salonRole,
+            branchId: membership.branchId || null,
+            customRoleId: membership.customRoleId || null,
+            permissions: mergedPermissions || {},
+            featureFlags: mergedFeatureFlags,
+            plan: subscription?.plan
+              ? {
+                  id: subscription.plan.id,
+                  name: subscription.plan.name,
+                  branchLimit: subscription.plan.branchLimit,
+                  userLimit: subscription.plan.userLimit,
+                  customerLimit: subscription.plan.customerLimit,
+                  invoiceLimit: subscription.plan.invoiceLimit,
+                  storageLimit: subscription.plan.storageLimit,
+                  isCustom: subscription.plan.isCustom
+                }
+              : null
+          }
+        : null
+    }
+  };
+};
+
+authRouter.post("/login", validate(schemas.login), async (req, res) => {
+  const { email, password, loginAccessToken } = req.body;
+  const cleanEmail = String(email || "").trim().toLowerCase();
+  const user = await prisma.user.findFirst({
+    where: { email: { equals: cleanEmail, mode: "insensitive" } },
+    include: {
+      memberships: {
+        include: {
+          salon: {
+            select: { id: true, status: true, featureFlags: true }
+          }
         }
-      : null
+      }
+    }
   });
+  if (!user) return res.status(401).json({ message: "Invalid credentials" });
+  if (user.isActive === false) return res.status(403).json({ message: "User account is inactive" });
+  if (user.passwordSetupRequired) return res.status(403).json({ message: "Password setup is still pending." });
+
+  const ok = await bcrypt.compare(password, user.passwordHash);
+  if (!ok) return res.status(401).json({ message: "Invalid credentials" });
+
+  if (user.systemRole !== "SUPER_ADMIN") {
+    const globalSetting = await prisma.globalSetting.findFirst();
+    if (globalSetting?.maintenanceMode) {
+      return res.status(503).json({ message: "System is in maintenance mode" });
+    }
+  }
+
+  // SuperAdmin directly logs in without OTP
+  if (user.systemRole === "SUPER_ADMIN") {
+    const authRes = await createAuthResponse(user);
+    if (authRes.errorStatus) return res.status(authRes.errorStatus).json(authRes.errorBody);
+    return res.json(authRes.data);
+  }
+
+  // --- OTP Logic for Salon Owner & Staff ---
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { loginOtp: otp, loginOtpExpiry: otpExpiry }
+  });
+
+  // Send OTP to email
+  await sendMail({
+    to: user.email,
+    subject: "Your Login OTP",
+    text: `Your OTP for login is ${otp}. It is valid for 10 minutes.`,
+    html: `<p>Your OTP for login is <strong>${otp}</strong>.</p><p>It is valid for 10 minutes.</p>`
+  }).catch(e => console.error("OTP Email failed", e));
+
+  // Return requiring OTP + include OTP for testing
+  return res.json({
+    requireOtp: true,
+    email: user.email,
+    otp: otp,
+    message: `OTP sent to your email. (Testing: ${otp})`
+  });
+});
+
+authRouter.post("/verify-otp", async (req, res) => {
+  const { email, tempToken, otp } = req.body;
+  if (!otp) return res.status(400).json({ message: "OTP is required" });
+
+  let cleanEmail = String(email || tempToken || "").trim().toLowerCase();
+  
+  let user = null;
+  if (cleanEmail && cleanEmail.includes("@")) {
+    user = await prisma.user.findFirst({
+      where: { email: { equals: cleanEmail, mode: "insensitive" } },
+      include: {
+        memberships: {
+          include: {
+            salon: {
+              select: { id: true, status: true, featureFlags: true, name: true }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  // Fallback: If email wasn't provided, find user by active loginOtp
+  if (!user) {
+    user = await prisma.user.findFirst({
+      where: { loginOtp: String(otp).trim() },
+      include: {
+        memberships: {
+          include: {
+            salon: {
+              select: { id: true, status: true, featureFlags: true, name: true }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  if (!user) return res.status(400).json({ message: "Invalid OTP or user not found" });
+
+  if (user.loginOtp !== String(otp).trim() || !user.loginOtpExpiry || user.loginOtpExpiry < new Date()) {
+    return res.status(400).json({ message: "Invalid or expired OTP" });
+  }
+
+  // Clear OTP
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { loginOtp: null, loginOtpExpiry: null }
+  });
+
+  const authRes = await createAuthResponse(user);
+  if (authRes.errorStatus) return res.status(authRes.errorStatus).json(authRes.errorBody);
+  return res.json(authRes.data);
 });
 
 authRouter.post("/resend-otp", async (req, res) => {
@@ -243,7 +283,12 @@ authRouter.post("/resend-otp", async (req, res) => {
     html: `<p>Your OTP for login is <strong>${otp}</strong>.</p><p>It is valid for 10 minutes.</p>`
   }).catch(e => console.error("OTP Email failed", e));
 
-  res.json({ success: true, message: "OTP resent to your email" });
+  return res.json({
+    success: true,
+    email: user.email,
+    otp: otp,
+    message: `A new OTP has been sent. (Testing: ${otp})`
+  });
 });
 
 authRouter.post("/refresh", async (req, res) => {

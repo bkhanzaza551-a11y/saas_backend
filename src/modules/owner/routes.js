@@ -12,6 +12,7 @@ import ExcelJS from "exceljs";
 import { registerPhase2OwnerRoutes } from "./phase2/index.js";
 import { registerPhase3OwnerRoutes } from "./phase3/index.js";
 import { registerPhase4OwnerRoutes } from "./phase4/index.js";
+import { registerMissingOwnerRoutes } from "./missingOwnerRoutes.js";
 import { getCampaignAudience } from "../../lib/phase3.js";
 
 export const ownerRouter = Router();
@@ -3099,6 +3100,7 @@ ownerRouter.get("/salon-details", requireSalonPermission("settings", "view"), as
 registerPhase2OwnerRoutes(ownerRouter);
 registerPhase3OwnerRoutes(ownerRouter);
 registerPhase4OwnerRoutes(ownerRouter);
+registerMissingOwnerRoutes(ownerRouter);
 
 ownerRouter.post("/_test-email-templates", async (req, res) => {
   const { sendMail } = await import("../../lib/mailer.js");
