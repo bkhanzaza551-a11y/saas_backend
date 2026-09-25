@@ -2954,13 +2954,16 @@ ownerRouter.get("/product-catalog", async (req, res) => {
 });
 
 ownerRouter.get("/product-requirements", async (req, res) => {
-  const where = {};
+  if (!req.salonId) return res.status(403).json({ message: "Salon context required" });
+  const where = { salonId: req.salonId };
   if (req.query.status) where.status = req.query.status;
   if (req.query.priority) where.priority = req.query.priority;
   if (req.query.branchId) where.branchId = req.query.branchId;
   if (req.query.q) {
     where.OR = [
       { productName: { contains: req.query.q, mode: "insensitive" } },
+      { brand: { contains: req.query.q, mode: "insensitive" } },
+      { category: { contains: req.query.q, mode: "insensitive" } },
       { description: { contains: req.query.q, mode: "insensitive" } },
       { vendor: { contains: req.query.q, mode: "insensitive" } }
     ];
@@ -2970,38 +2973,52 @@ ownerRouter.get("/product-requirements", async (req, res) => {
 });
 
 ownerRouter.post("/product-requirements", async (req, res) => {
+  if (!req.salonId) return res.status(403).json({ message: "Salon context required" });
   const row = await prisma.productRequirement.create({ data: {
+    salonId: req.salonId,
+    branchId: req.body.branchId || req.branchId || null,
+    brand: req.body.brand || null,
     productName: req.body.productName,
-    description: req.body.description || null,
+    description: req.body.description || req.body.note || null,
     category: req.body.category || null,
-    quantity: req.body.requiredQty || req.body.quantity || 1,
-    unitPrice: req.body.unitCost || req.body.unitPrice || null,
+    packSize: req.body.packSize || req.body.unitPackSize || null,
+    quantity: parseInt(req.body.requiredQty || req.body.quantity, 10) || 1,
+    unitPrice: req.body.unitPrice ? parseFloat(req.body.unitPrice) : (req.body.unitCost ? parseFloat(req.body.unitCost) : null),
     priority: req.body.priority || "MEDIUM",
-    status: req.body.status || "PENDING",
+    status: req.body.status || "NEW",
+    notes: req.body.note || req.body.notes || null,
     vendor: req.body.vendor || null
   }});
   res.status(201).json(row);
 });
 
 ownerRouter.patch("/product-requirements/:id", async (req, res) => {
-  const existing = await prisma.productRequirement.findUnique({ where: { id: req.params.id } });
+  if (!req.salonId) return res.status(403).json({ message: "Salon context required" });
+  const existing = await prisma.productRequirement.findFirst({ where: { id: req.params.id, salonId: req.salonId } });
   if (!existing) return res.status(404).json({ message: "Not found" });
   const data = {};
   if (req.body.productName !== undefined) data.productName = req.body.productName;
+  if (req.body.brand !== undefined) data.brand = req.body.brand;
   if (req.body.description !== undefined) data.description = req.body.description;
   if (req.body.category !== undefined) data.category = req.body.category;
-  if (req.body.requiredQty !== undefined || req.body.quantity !== undefined) data.quantity = req.body.requiredQty || req.body.quantity;
-  if (req.body.unitCost !== undefined || req.body.unitPrice !== undefined) data.unitPrice = req.body.unitCost || req.body.unitPrice;
+  if (req.body.packSize !== undefined || req.body.unitPackSize !== undefined) data.packSize = req.body.packSize || req.body.unitPackSize;
+  if (req.body.requiredQty !== undefined || req.body.quantity !== undefined) data.quantity = parseInt(req.body.requiredQty || req.body.quantity, 10) || 1;
+  if (req.body.unitCost !== undefined || req.body.unitPrice !== undefined) data.unitPrice = req.body.unitPrice ? parseFloat(req.body.unitPrice) : (req.body.unitCost ? parseFloat(req.body.unitCost) : null);
   if (req.body.priority !== undefined) data.priority = req.body.priority;
   if (req.body.status !== undefined) data.status = req.body.status;
+  if (req.body.note !== undefined || req.body.notes !== undefined) data.notes = req.body.note || req.body.notes;
   if (req.body.vendor !== undefined) data.vendor = req.body.vendor;
   res.json(await prisma.productRequirement.update({ where: { id: req.params.id }, data }));
 });
 
 ownerRouter.delete("/product-requirements/:id", async (req, res) => {
+  if (!req.salonId) return res.status(403).json({ message: "Salon context required" });
+  const existing = await prisma.productRequirement.findFirst({ where: { id: req.params.id, salonId: req.salonId } });
+  if (!existing) return res.status(404).json({ message: "Not found or permission denied" });
   await prisma.productRequirement.delete({ where: { id: req.params.id } });
   res.json({ message: "Deleted" });
 });
+
 
 ownerRouter.get("/staff-requirements", requireSalonPermission("staff", "view"), async (req, res) => {
   const where = { salonId: req.salonId };

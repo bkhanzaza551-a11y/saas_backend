@@ -958,19 +958,36 @@ superAdminRouter.post("/demo-leads", asyncHandler(async (req, res) => {
 superAdminRouter.get("/demo-leads", asyncHandler(async (req, res) => {
   const status = req.query.status ? String(req.query.status) : "";
   const q = req.query.q ? String(req.query.q).trim() : "";
+  const source = req.query.leadSource || req.query.source ? String(req.query.leadSource || req.query.source).trim() : "";
+  const assignedUserId = req.query.assignedUserId || req.query.assigned ? String(req.query.assignedUserId || req.query.assigned).trim() : "";
+  const createdFrom = req.query.createdFrom || req.query.from ? new Date(req.query.createdFrom || req.query.from) : null;
+  const createdTo = req.query.createdTo || req.query.to ? new Date(req.query.createdTo || req.query.to) : null;
+  if (createdTo) createdTo.setHours(23, 59, 59, 999);
+
+  const where = {
+    ...(status ? { status } : {}),
+    ...(source ? { leadSource: { equals: source, mode: "insensitive" } } : {}),
+    ...(assignedUserId ? { assignedUserId } : {}),
+    ...((createdFrom || createdTo) ? {
+      createdAt: {
+        ...(createdFrom ? { gte: createdFrom } : {}),
+        ...(createdTo ? { lte: createdTo } : {})
+      }
+    } : {}),
+    ...(q ? {
+      OR: [
+        { name: { contains: q, mode: "insensitive" } },
+        { email: { contains: q, mode: "insensitive" } },
+        { phone: { contains: q, mode: "insensitive" } },
+        { message: { contains: q, mode: "insensitive" } },
+        { company: { contains: q, mode: "insensitive" } }
+      ]
+    } : {})
+  };
+
   res.json(
     await prisma.demoLead.findMany({
-      where: {
-        ...(status ? { status } : {}),
-        ...(q ? {
-          OR: [
-            { name: { contains: q, mode: "insensitive" } },
-            { email: { contains: q, mode: "insensitive" } },
-            { phone: { contains: q, mode: "insensitive" } },
-            { message: { contains: q, mode: "insensitive" } }
-          ]
-        } : {})
-      },
+      where,
       include: {
         salon: {
           select: {
