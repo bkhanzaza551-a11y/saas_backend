@@ -313,9 +313,16 @@ publicRouter.get("/plans", asyncHandler(async (req, res) => {
 }));
 
 publicRouter.post("/demo-leads", validate(schemas.demoLead), asyncHandler(async (req, res) => {
-  const { name, email, phone, company, message } = req.body;
+  const { name, email, phone, company, salonName, notes, message, city } = req.body;
   const lead = await prisma.demoLead.create({
-    data: { name, email, phone, company, message, status: "NEW" }
+    data: {
+      name,
+      email,
+      phone,
+      company: company || salonName || "Salon Inquiry",
+      message: message || (notes ? (city ? `${notes} (City: ${city})` : notes) : (city ? `City: ${city}` : undefined)),
+      status: "NEW"
+    }
   });
   res.status(201).json(lead);
 }));

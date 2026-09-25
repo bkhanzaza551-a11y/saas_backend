@@ -147,7 +147,11 @@ const isValidPhone = (value) => {
   const raw = String(value ?? "").trim();
   if (!raw) return false;
   const digits = raw.replace(/\D/g, "");
-  return digits.length === 10;
+  if (digits.length === 10) return true;
+  if (digits.length === 11 && digits.startsWith("0")) return true;
+  if (digits.length === 12 && digits.startsWith("91")) return true;
+  if (digits.length === 13 && digits.startsWith("091")) return true;
+  return false;
 };
 const indianPhoneSchema = z.string().trim()
   .refine((value) => isValidPhone(value), "Enter a valid 10-digit phone number");
@@ -528,7 +532,11 @@ export const schemas = {
       email: emailLikeSchema,
       phone: indianPhoneSchema,
       company: z.string().min(2).optional(),
-      message: z.string().optional()
+      salonName: z.string().min(2).optional(),
+      city: z.string().optional(),
+      notes: z.string().optional(),
+      message: z.string().optional(),
+      branchCount: z.union([z.string(), z.number()]).optional()
     })
   }),
   demoLeadReview: z.object({
