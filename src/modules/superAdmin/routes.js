@@ -1818,3 +1818,312 @@ superAdminRouter.post("/team/:id/reset-password", asyncHandler(async (req, res) 
 superAdminRouter.get("/team/:id/activity", asyncHandler(async (req, res) => {
   res.json([]);
 }));
+
+// ==========================================
+// Finance Hub & Revenue Tracking Endpoints
+// ==========================================
+
+superAdminRouter.get("/finance/summary", asyncHandler(async (req, res) => {
+  const { from, to } = req.query || {};
+
+  const dateFilter = {};
+  if (from) dateFilter.gte = new Date(from);
+  if (to) {
+    const toDate = new Date(to);
+    toDate.setHours(23, 59, 59, 999);
+    dateFilter.lte = toDate;
+  }
+  const hasDateFilter = Object.keys(dateFilter).length > 0;
+
+  // 1. Subscriptions
+  const subs = await prisma.subscription.findMany({
+    where: {
+      ...(hasDateFilter ? { startsAt: dateFilter } : {})
+    },
+    include: { plan: true }
+  });
+
+  let subscriptionRevenue = 0;
+  let pendingAmount = 0;
+  let pendingCount = 0;
+
+  subs.forEach((sub) => {
+    const planPrice = Number(sub.plan?.yearlyPrice || (sub.plan?.monthlyPrice ? sub.plan.monthlyPrice * 12 : 44999));
+    const paidAmount = Number(sub.manualDiscount ? Math.max(0, planPrice - Number(sub.manualDiscount)) : planPrice);
+
+    if (sub.status === "ACTIVE" || sub.paymentStatus === "PAID" || sub.paymentStatus === "COMPLETED") {
+      subscriptionRevenue += paidAmount;
+    } else {
+      pendingAmount += planPrice;
+      pendingCount += 1;
+    }
+  });
+
+  // 2. Manual Recorded Payments in AuditLog
+  const manualPayments = await prisma.auditLog.findMany({
+    where: {
+      module: "FINANCE",
+      action: "PAYMENT_RECORDED",
+      ...(hasDateFilter ? { createdAt: dateFilter } : {})
+    }
+  }).catch(() => []);
+
+  let manualSubRevenue = 0;
+  let manualProductRevenue = 0;
+
+  manualPayments.forEach((log) => {
+    const meta = log.metadata || {};
+    const amt = Number(meta.amount || 0);
+    if (meta.paymentFor === "Product") {
+      manualProductRevenue += amt;
+    } else {
+      manualSubRevenue += amt;
+    }
+  });
+
+  // 3. Online Orders
+  const orders = await prisma.onlineOrder.findMany({
+    where: {
+      paymentStatus: "PAID",
+      ...(hasDateFilter ? { createdAt: dateFilter } : {})
+    }
+  }).catch(() => []);
+
+  const orderProductRevenue = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
+  const totalProductRevenue = manualProductRevenue + orderProductRevenue;
+  const totalSubscriptionRevenue = subscriptionRevenue + manualSubRevenue;
+  const totalRevenue = totalSubscriptionRevenue + totalProductRevenue;
+
+  res.json({
+    totalRevenue,
+    subscriptionRevenue: totalSubscriptionRevenue,
+    productRevenue: totalProductRevenue,
+    pendingAmount,
+    pendingCount,
+    refundsAmount: 0
+  });
+}));
+
+superAdminRouter.get("/finance/transactions", asyncHandler(async (req, res) => {
+  const { salonId, mode, status, paymentFor, q, from, to } = req.query || {};
+
+  const dateFilter = {};
+  if (from) dateFilter.gte = new Date(from);
+  if (to) {
+    const toDate = new Date(to);
+    toDate.setHours(23, 59, 59, 999);
+    dateFilter.lte = toDate;
+  }
+  const hasDateFilter = Object.keys(dateFilter).length > 0;
+
+  // A. Subscriptions & History
+  const subs = await prisma.subscription.findMany({
+    where: {
+      ...(salonId ? { salonId } : {}),
+      ...(hasDateFilter ? { startsAt: dateFilter } : {})
+    },
+    include: {
+      salon: true,
+      plan: true,
+      history: {
+        where: {
+          action: { in: ["ANNUAL_PLAN_ACTIVATED", "ONBOARDING_PAID", "UPGRADED", "RENEWED", "PAYMENT_RECORDED"] }
+        },
+        orderBy: { createdAt: "desc" }
+      }
+    },
+    orderBy: { startsAt: "desc" }
+  });
+
+  const subTransactions = [];
+
+  subs.forEach((sub) => {
+    const planPrice = Number(sub.plan?.yearlyPrice || (sub.plan?.monthlyPrice ? sub.plan.monthlyPrice * 12 : 44999));
+
+    if (sub.history && sub.history.length > 0) {
+      sub.history.forEach((h) => {
+        let customAmount = null;
+        if (h.notes) {
+          const match = h.notes.match(/₹\s*([0-9,]+)/);
+          if (match) {
+            const parsed = Number(match[1].replace(/,/g, ""));
+            if (!isNaN(parsed) && parsed > 0) customAmount = parsed;
+          }
+        }
+        const finalAmount = customAmount || planPrice;
+
+        subTransactions.push({
+          id: h.id,
+          transactionId: `TXN-${h.id.slice(-8).toUpperCase()}`,
+          salon: { id: sub.salon?.id, name: sub.salon?.name || "Salon" },
+          paymentFor: "Subscription",
+          amount: finalAmount,
+          paymentMethod: "ONLINE",
+          paymentStatus: "COMPLETED",
+          paymentDate: h.createdAt,
+          reference: h.action === "UPGRADED" ? `Plan Upgrade (${sub.plan?.name || "Enterprise"})` : `${sub.plan?.name || "Plan"} Annual`,
+          notes: h.notes || `Annual Subscription Payment • ${h.action}`
+        });
+      });
+    } else {
+      const isPaid = sub.status === "ACTIVE" || sub.paymentStatus === "PAID" || sub.paymentStatus === "COMPLETED";
+      subTransactions.push({
+        id: `sub-${sub.id}`,
+        transactionId: `TXN-SUB-${sub.id.slice(-8).toUpperCase()}`,
+        salon: { id: sub.salon?.id, name: sub.salon?.name || "Salon" },
+        paymentFor: "Subscription",
+        amount: planPrice,
+        paymentMethod: "ONLINE",
+        paymentStatus: isPaid ? "COMPLETED" : "PENDING",
+        paymentDate: sub.startsAt,
+        reference: `${sub.plan?.name || "Enterprise"} Annual Plan`,
+        notes: sub.notes || "Annual Subscription Billing"
+      });
+    }
+  });
+
+  // B. Manual Payments from AuditLog
+  const manualLogs = await prisma.auditLog.findMany({
+    where: {
+      module: "FINANCE",
+      action: "PAYMENT_RECORDED",
+      ...(salonId ? { salonId } : {}),
+      ...(hasDateFilter ? { createdAt: dateFilter } : {})
+    },
+    orderBy: { createdAt: "desc" }
+  }).catch(() => []);
+
+  const allSalons = await prisma.salon.findMany({ select: { id: true, name: true } });
+  const salonLookup = Object.fromEntries(allSalons.map((s) => [s.id, s.name]));
+
+  const manualTransactions = manualLogs.map((log) => {
+    const meta = log.metadata || {};
+    return {
+      id: log.id,
+      transactionId: meta.transactionId || `TXN-MAN-${log.id.slice(-8).toUpperCase()}`,
+      salon: { id: log.salonId || meta.salonId, name: meta.salonName || salonLookup[log.salonId] || "Salon" },
+      paymentFor: meta.paymentFor || "Subscription",
+      amount: Number(meta.amount || 0),
+      paymentMethod: meta.mode || "ONLINE",
+      paymentStatus: "COMPLETED",
+      paymentDate: meta.paidAt ? new Date(meta.paidAt) : log.createdAt,
+      reference: meta.reference || "Manual Entry",
+      notes: meta.notes || log.summary
+    };
+  });
+
+  // C. Online Orders (Product Payments)
+  const orders = await prisma.onlineOrder.findMany({
+    where: {
+      ...(salonId ? { salonId } : {}),
+      ...(hasDateFilter ? { createdAt: dateFilter } : {})
+    },
+    include: { salon: true },
+    orderBy: { createdAt: "desc" },
+    take: 50
+  }).catch(() => []);
+
+  const orderTransactions = orders.map((o) => ({
+    id: o.id,
+    transactionId: o.orderNumber || `ORD-${o.id.slice(-8).toUpperCase()}`,
+    salon: { id: o.salon?.id, name: o.salon?.name || "Salon" },
+    paymentFor: "Product",
+    amount: Number(o.total || 0),
+    paymentMethod: "ONLINE",
+    paymentStatus: o.paymentStatus === "PAID" ? "COMPLETED" : o.paymentStatus === "FAILED" ? "FAILED" : "PENDING",
+    paymentDate: o.createdAt,
+    reference: o.customerName ? `Store Order • ${o.customerName}` : "Store Order",
+    notes: o.note || `Fulfillment: ${o.fulfillmentMethod}`
+  }));
+
+  // Combine all
+  let allTxns = [...manualTransactions, ...subTransactions, ...orderTransactions];
+
+  // Apply filters
+  if (salonId) {
+    allTxns = allTxns.filter((t) => t.salon?.id === salonId);
+  }
+  if (mode) {
+    allTxns = allTxns.filter((t) => String(t.paymentMethod).toUpperCase() === String(mode).toUpperCase());
+  }
+  if (status) {
+    allTxns = allTxns.filter((t) => String(t.paymentStatus).toUpperCase() === String(status).toUpperCase());
+  }
+  if (paymentFor) {
+    allTxns = allTxns.filter((t) => String(t.paymentFor).toLowerCase() === String(paymentFor).toLowerCase());
+  }
+  if (q) {
+    const search = q.toLowerCase();
+    allTxns = allTxns.filter((t) =>
+      (t.transactionId && t.transactionId.toLowerCase().includes(search)) ||
+      (t.salon?.name && t.salon.name.toLowerCase().includes(search)) ||
+      (t.reference && t.reference.toLowerCase().includes(search)) ||
+      (t.notes && t.notes.toLowerCase().includes(search))
+    );
+  }
+
+  // Sort descending by paymentDate
+  allTxns.sort((a, b) => new Date(b.paymentDate) - new Date(a.paymentDate));
+
+  res.json(allTxns);
+}));
+
+superAdminRouter.post("/finance/record-payment", asyncHandler(async (req, res) => {
+  const { salonId, amount, mode = "ONLINE", paymentFor = "Subscription", reference = "", notes = "", paidAt } = req.body || {};
+  if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+    return res.status(400).json({ message: "A valid positive amount is required" });
+  }
+
+  let salonName = "";
+  let sub = null;
+  if (salonId) {
+    const salon = await prisma.salon.findUnique({
+      where: { id: salonId },
+      include: { subscriptions: { where: { status: "ACTIVE" }, take: 1 } }
+    });
+    salonName = salon?.name || "";
+    sub = salon?.subscriptions?.[0] || null;
+  }
+
+  const txnId = `TXN-REC-${Date.now().toString().slice(-6)}${Math.random().toString(36).slice(-3).toUpperCase()}`;
+
+  const log = await prisma.auditLog.create({
+    data: {
+      salonId: salonId || null,
+      actorUserId: req.user?.id || null,
+      module: "FINANCE",
+      action: "PAYMENT_RECORDED",
+      entityType: "PaymentTransaction",
+      entityId: txnId,
+      summary: `Recorded ${paymentFor} payment of ₹${Number(amount).toLocaleString()} (${mode})`,
+      metadata: {
+        transactionId: txnId,
+        salonId,
+        salonName,
+        amount: Number(amount),
+        mode,
+        paymentFor,
+        reference,
+        notes,
+        paidAt: paidAt || new Date().toISOString()
+      }
+    }
+  });
+
+  if (sub) {
+    await prisma.subscriptionHistory.create({
+      data: {
+        subscriptionId: sub.id,
+        action: "PAYMENT_RECORDED",
+        createdBy: req.user?.name || "Super Admin",
+        fromStatus: sub.status,
+        toStatus: sub.status,
+        fromPaymentStatus: sub.paymentStatus || "PENDING",
+        toPaymentStatus: "PAID",
+        notes: `Recorded manual payment: ₹${Number(amount).toLocaleString()} (${mode}). Ref: ${reference || "N/A"}. Notes: ${notes || "N/A"}`
+      }
+    }).catch(() => null);
+  }
+
+  res.status(201).json({ success: true, transactionId: txnId, log });
+}));
