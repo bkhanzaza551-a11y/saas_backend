@@ -483,6 +483,9 @@ model DemoLead {
   nextFollowUpAt      DateTime?
   lostReason          String?
   inviteSentAt        DateTime?
+  paymentCompleted    Boolean              @default(false)
+  paymentSessionId    String?
+  selectedPlanId      String?
   createdAt           DateTime             @default(now())
   salon               Salon?               @relation(fields: [salonId], references: [id])
   passwordSetupTokens PasswordSetupToken[]
