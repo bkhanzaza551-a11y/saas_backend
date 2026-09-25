@@ -119,7 +119,7 @@ superAdminRouter.get("/dashboard", asyncHandler(async (req, res) => {
     prisma.salon.count({ where: { ...salonWhere, status: "EXPIRED" } }),
     prisma.salon.count({ where: { status: "SUSPENDED" } }), // Attention item: always show current suspended
     prisma.demoLead.count({ where: leadWhere }),
-    prisma.demoLead.count({ where: { ...leadWhere, status: { notIn: ["CONVERTED", "LOST"] } } }),
+    prisma.demoLead.count({ where: { ...leadWhere, status: { notIn: ["CONVERTED", "CANCELED"] } } }),
     prisma.demoLead.count({ where: { ...leadWhere, status: "CONVERTED" } }),
     prisma.demoLead.count({ where: { ...leadWhere, status: "DEMO_SCHEDULED" } }),
     prisma.supportTicket.count({ where: ticketWhere }),
