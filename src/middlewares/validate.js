@@ -158,7 +158,7 @@ const indianPhoneSchema = z.string().trim()
 const requiredIndianPhoneSchema = z.string().trim()
   .min(5, "Phone must be at least 5 characters")
   .refine((value) => isValidPhone(value), "Enter a valid 10-digit phone number");
-const optionalIndianPhoneSchema = z.union([z.literal(""), indianPhoneSchema]).optional()
+const optionalIndianPhoneSchema = z.union([z.literal(""), indianPhoneSchema]).nullable().optional()
   .transform((value) => value || undefined);
 const vendorPhoneSchema = z.string().trim().refine(
   (value) => isValidPhone(value),
@@ -183,7 +183,7 @@ const emailLikeSchema = z.string().trim().refine(
   (value) => /^[^\s@]+@(?:[^\s@]+\.[^\s@]+|local)$/i.test(value),
   "Invalid email address"
 );
-const optionalEmailLike = z.union([emailLikeSchema, z.literal("")]).optional();
+const optionalEmailLike = z.union([emailLikeSchema, z.literal("")]).nullable().optional();
 
 const invoiceItemSchema = z.object({
   itemType: z.enum(["SERVICE", "PRODUCT", "MEMBERSHIP", "PACKAGE", "GIFT_CARD"]).optional(),
