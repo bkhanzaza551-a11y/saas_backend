@@ -14,6 +14,8 @@ import { registerPhase3OwnerRoutes } from "./phase3/index.js";
 import { registerPhase4OwnerRoutes } from "./phase4/index.js";
 import { registerMissingOwnerRoutes } from "./missingOwnerRoutes.js";
 import { getCampaignAudience } from "../../lib/phase3.js";
+import { sendMail } from "../../lib/mailer.js";
+import { generateRawPasswordSetupToken, generateTemporaryPassword, hashPasswordSetupToken } from "../../lib/passwordSetup.js";
 
 export const ownerRouter = Router();
 patchRouterForAsync(ownerRouter);
@@ -194,12 +196,15 @@ const createLoginUserForSalon = async (salonId, payload) => {
     }
   }
 
+  const salon = await prisma.salon.findUnique({ where: { id: salonId }, select: { name: true } });
+  const rawPassword = password || generateTemporaryPassword();
+
   const created = await prisma.$transaction(async (tx) => {
     const user = await tx.user.create({
       data: {
         name,
         email,
-        passwordHash: await bcrypt.hash(password, 10),
+        passwordHash: await bcrypt.hash(rawPassword, 10),
         systemRole: "SALON_USER"
       }
     });
@@ -241,13 +246,56 @@ const createLoginUserForSalon = async (salonId, payload) => {
       });
     }
 
-    return tx.userSalon.findUnique({
-      where: { id: membership.id },
-      include: { user: true, branch: true, customRole: true, shift: true, serviceAssignments: { include: { service: true } } }
+    const rawToken = generateRawPasswordSetupToken();
+    const tokenHash = hashPasswordSetupToken(rawToken);
+    await tx.passwordSetupToken.create({
+      data: {
+        userId: user.id,
+        tokenHash,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+      }
     });
+
+    return {
+      membership: await tx.userSalon.findUnique({
+        where: { id: membership.id },
+        include: { user: true, branch: true, customRole: true, shift: true, serviceAssignments: { include: { service: true } } }
+      }),
+      rawToken
+    };
   });
 
-  return { status: 201, body: { membership: created } };
+  // Dispatch setup email asynchronously
+  try {
+    const frontendUrl = process.env.FRONTEND_APP_URL || "https://saas-frontend-delta-one.vercel.app";
+    const setupLink = `${frontendUrl}/reset-password?token=${encodeURIComponent(created.rawToken)}&email=${encodeURIComponent(email)}`;
+    const salonName = salon?.name || "SalonNest";
+    const roleLabel = roleTitle || salonRole || "Staff";
+
+    await sendMail({
+      to: email,
+      subject: `Set up your password for ${salonName}`,
+      text: `Hi ${name},\n\nYou have been added as ${roleLabel} at ${salonName}.\nPlease click the link below to set up your account password:\n${setupLink}\n\nRegards,\n${salonName} Team`,
+      html: `
+        <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:32px;color:#1e293b;">
+          <div style="max-width:580px;margin:0 auto;background:#ffffff;border-radius:16px;padding:32px;border:1px solid #e2e8f0;">
+            <p style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:#0f766e;font-weight:700;margin:0 0 10px;">Staff Access Setup</p>
+            <h2 style="margin:0 0 14px;color:#0f172a;font-size:24px;">Welcome to ${salonName}</h2>
+            <p style="font-size:15px;line-height:1.6;color:#475569;margin:0 0 20px;">Hi <strong>${name}</strong>, your staff account (${roleLabel}) has been created for <strong>${salonName}</strong>. Please click below to create your password and log in.</p>
+            <p style="margin:0 0 24px;">
+              <a href="${setupLink}" style="display:inline-block;background:linear-gradient(135deg,#0f766e,#0d9488);color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:700;font-size:14px;">Set Up Your Password</a>
+            </p>
+            <p style="font-size:13px;color:#64748b;line-height:1.6;margin:0 0 8px;">Or copy and paste this link into your browser:</p>
+            <p style="font-size:12px;color:#0f766e;word-break:break-all;margin:0 0 20px;">${setupLink}</p>
+          </div>
+        </div>
+      `
+    });
+  } catch (err) {
+    console.error("[StaffInvite] Error sending password setup email:", err);
+  }
+
+  return { status: 201, body: { membership: created.membership, message: "Staff created and password setup email sent." } };
 };
 
 ownerRouter.get("/dashboard", requireSalonPermission("dashboard", "view"), async (req, res) => {
@@ -516,7 +564,14 @@ ownerRouter.get("/branches/limit-info", requireSalonPermission("branches", "view
     include: { plan: true }
   });
   const branchLimit = subscription?.plan?.maxBranches || subscription?.plan?.limits?.maxBranches || 999;
-  res.json({ count, limit: branchLimit, canAdd: count < branchLimit });
+  const planName = subscription?.plan?.name || "Free Trial";
+  res.json({ 
+    planName,
+    branchCount: count, 
+    branchLimit, 
+    remaining: Math.max(0, branchLimit - count),
+    canAdd: count < branchLimit 
+  });
 });
 
 
@@ -2160,7 +2215,70 @@ ownerRouter.get("/staff-users", requireSalonPermission("staff", "view"), async (
   })));
 });
 ownerRouter.get("/custom-roles", requireSalonPermission("staff", "view"), async (req, res) => {
-  res.json(await prisma.customRole.findMany({ where: { salonId: req.salonId }, orderBy: { createdAt: "desc" } }));
+  let dbRoles = await prisma.customRole.findMany({ where: { salonId: req.salonId }, orderBy: { createdAt: "desc" } });
+  
+  const existingNames = dbRoles.map(r => r.name);
+  const missingPresets = [];
+  
+  if (!existingNames.includes("Owner")) {
+    missingPresets.push({
+      salonId: req.salonId,
+      name: "Owner",
+      description: "Full access to all modules and settings",
+      isSystemPreset: true,
+      permissions: {
+        dashboard: ["view"], appointments: ["view", "create", "edit"], customers: ["view", "create", "edit"],
+        pos: ["view", "create", "edit", "approve", "pay"], services: ["view", "create", "edit"],
+        inventory: ["view", "create", "edit"], campaigns: ["view", "create", "edit"],
+        staff: ["view", "create", "edit"], expenses: ["view", "create", "edit"],
+        reports: ["view"], settings: ["view", "edit"], manage: ["view"], support: ["view", "create", "edit"],
+        enquiries: ["view", "create", "edit"]
+      }
+    });
+  }
+  
+  if (!existingNames.includes("Manager")) {
+    missingPresets.push({
+      salonId: req.salonId,
+      name: "Manager",
+      description: "Access to operations, staff management, and reports",
+      isSystemPreset: true,
+      permissions: {
+        dashboard: ["view"], appointments: ["view", "create", "edit"], customers: ["view", "create", "edit"],
+        pos: ["view", "create", "edit", "approve", "pay"], services: ["view", "create", "edit"],
+        inventory: ["view", "create", "edit"], campaigns: ["view", "create"],
+        staff: ["view", "create", "edit"], expenses: ["view", "create", "edit"],
+        reports: ["view"], manage: ["view"], enquiries: ["view", "create", "edit"]
+      }
+    });
+  }
+  
+  if (!existingNames.includes("Staff")) {
+    missingPresets.push({
+      salonId: req.salonId,
+      name: "Staff",
+      description: "Basic access for day-to-day front desk tasks",
+      isSystemPreset: true,
+      permissions: {
+        dashboard: ["view"], appointments: ["view", "create", "edit"], customers: ["view", "create"],
+        pos: ["view", "create"], enquiries: ["view", "create"]
+      }
+    });
+  }
+  
+  if (missingPresets.length > 0) {
+    await prisma.customRole.createMany({ data: missingPresets });
+    dbRoles = await prisma.customRole.findMany({ where: { salonId: req.salonId }, orderBy: { createdAt: "asc" } });
+  }
+
+  // Sort so System Presets appear first
+  dbRoles.sort((a, b) => {
+    if (a.isSystemPreset && !b.isSystemPreset) return -1;
+    if (!a.isSystemPreset && b.isSystemPreset) return 1;
+    return 0;
+  });
+
+  res.json(dbRoles);
 });
 const stripDeletePerms = (perms) => {
   if (!perms || typeof perms !== "object") return perms;
@@ -2367,6 +2485,52 @@ ownerRouter.patch("/users/:id/unarchive", requireSalonPermission("staff", "delet
   const row = await prisma.userSalon.findFirst({ where: { id: req.params.id, salonId: req.salonId } });
   if (!row) return res.status(404).json({ message: "User mapping not found" });
   res.json(await prisma.userSalon.update({ where: { id: req.params.id }, data: { isArchived: false } }));
+});
+
+ownerRouter.post("/users/:id/send-setup-email", requireSalonPermission("staff", "edit"), async (req, res) => {
+  const membership = await prisma.userSalon.findFirst({
+    where: { id: req.params.id, salonId: req.salonId },
+    include: { user: true, salon: true }
+  });
+  if (!membership || !membership.user?.email) {
+    return res.status(404).json({ message: "Staff user or email not found" });
+  }
+
+  const rawToken = generateRawPasswordSetupToken();
+  const tokenHash = hashPasswordSetupToken(rawToken);
+  await prisma.passwordSetupToken.create({
+    data: {
+      userId: membership.userId,
+      tokenHash,
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+    }
+  });
+
+  const frontendUrl = process.env.FRONTEND_APP_URL || "https://saas-frontend-delta-one.vercel.app";
+  const setupLink = `${frontendUrl}/reset-password?token=${encodeURIComponent(rawToken)}&email=${encodeURIComponent(membership.user.email)}`;
+  const salonName = membership.salon?.name || "SalonNest";
+
+  await sendMail({
+    to: membership.user.email,
+    subject: `Set up your password for ${salonName}`,
+    text: `Hi ${membership.user.name},\n\nPlease use the link below to set up your password:\n${setupLink}\n\nRegards,\n${salonName} Team`,
+    html: `
+      <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:32px;color:#1e293b;">
+        <div style="max-width:580px;margin:0 auto;background:#ffffff;border-radius:16px;padding:32px;border:1px solid #e2e8f0;">
+          <p style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:#0f766e;font-weight:700;margin:0 0 10px;">Staff Access Setup</p>
+          <h2 style="margin:0 0 14px;color:#0f172a;font-size:24px;">Welcome to ${salonName}</h2>
+          <p style="font-size:15px;line-height:1.6;color:#475569;margin:0 0 20px;">Hi <strong>${membership.user.name}</strong>, click below to set up your login password for <strong>${salonName}</strong>.</p>
+          <p style="margin:0 0 24px;">
+            <a href="${setupLink}" style="display:inline-block;background:linear-gradient(135deg,#0f766e,#0d9488);color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:700;font-size:14px;">Set Up Your Password</a>
+          </p>
+          <p style="font-size:13px;color:#64748b;line-height:1.6;margin:0 0 8px;">Or copy and paste this link into your browser:</p>
+          <p style="font-size:12px;color:#0f766e;word-break:break-all;margin:0 0 20px;">${setupLink}</p>
+        </div>
+      </div>
+    `
+  }).catch((err) => console.error("[StaffInvite] Error sending email:", err));
+
+  res.json({ ok: true, message: `Password setup link sent to ${membership.user.email}` });
 });
 
 ownerRouter.get("/support-tickets", requireSalonPermission("support", "view"), async (req, res) => {

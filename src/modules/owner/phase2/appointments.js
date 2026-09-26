@@ -198,6 +198,27 @@ export const registerAppointmentRoutes = (ownerRouter) => {
     res.json(rows);
   });
 
+  ownerRouter.get("/appointments/pending-unassigned", requireFeatureEnabled("appointments"), requireSalonPermission("appointments", "view"), async (req, res) => {
+    const branchId = normalizeBranchId(req.query.branchId);
+    const rows = await prisma.appointment.findMany({
+      where: {
+        ...buildAppointmentScope(req, branchId),
+        bookingChannel: { not: "ONLINE" },
+        status: { notIn: ["CANCELLED", "COMPLETED"] },
+        primaryStaffUserId: null
+      },
+      include: {
+        customer: true,
+        branch: true,
+        primaryStaff: { include: { user: true } },
+        items: { include: { service: true, assignedStaff: { include: { userSalon: { include: { user: true } } } } } }
+      },
+      orderBy: { startAt: "asc" },
+      take: 200
+    });
+    res.json(rows);
+  });
+
   ownerRouter.get("/appointments/:id", requireFeatureEnabled("appointments"), requireSalonPermission("appointments", "view"), async (req, res) => {
     const appointment = await fetchAppointment(req.salonId, req.params.id);
     if (!appointment) return res.status(404).json({ message: "Appointment not found" });
@@ -222,20 +243,22 @@ export const registerAppointmentRoutes = (ownerRouter) => {
         if (service.branchId && service.branchId !== body.branchId) {
           return res.status(400).json({ message: `${service.name} does not belong to the selected branch` });
         }
-        for (const staffUserId of item.staffUserIds) {
+        for (const staffUserId of (item.staffUserIds || [])) {
           const membership = await ensureScopedStaffMembership(req.salonId, staffUserId);
           const assignedServiceIds = membership.serviceAssignments.map((assignment) => assignment.serviceId);
           if (assignedServiceIds.length && !assignedServiceIds.includes(item.serviceId)) {
             return res.status(400).json({ message: `${membership.user.name} is not assigned to ${service.name}` });
           }
         }
-        await checkStaffAvailability({
-          salonId: req.salonId,
-          branchId: body.branchId,
-          staffMembershipIds: item.staffUserIds,
-          startAt: item.startAt,
-          endAt: item.endAt
-        });
+        if (item.staffUserIds?.length) {
+          await checkStaffAvailability({
+            salonId: req.salonId,
+            branchId: body.branchId,
+            staffMembershipIds: item.staffUserIds,
+            startAt: item.startAt,
+            endAt: item.endAt
+          });
+        }
       }
 
       const settings = await prisma.appointmentSetting.findFirst({ where: { salonId: req.salonId, branchId: body.branchId } })
@@ -319,21 +342,23 @@ export const registerAppointmentRoutes = (ownerRouter) => {
         if (service.branchId && service.branchId !== req.body.branchId) {
           return res.status(400).json({ message: `${service.name} does not belong to the selected branch` });
         }
-        for (const staffUserId of item.staffUserIds) {
+        for (const staffUserId of (item.staffUserIds || [])) {
           const membership = await ensureScopedStaffMembership(req.salonId, staffUserId);
           const assignedServiceIds = membership.serviceAssignments.map((assignment) => assignment.serviceId);
           if (assignedServiceIds.length && !assignedServiceIds.includes(item.serviceId)) {
             return res.status(400).json({ message: `${membership.user.name} is not assigned to ${service.name}` });
           }
         }
-        await checkStaffAvailability({
-          salonId: req.salonId,
-          branchId: req.body.branchId,
-          staffMembershipIds: item.staffUserIds,
-          startAt: item.startAt,
-          endAt: item.endAt,
-          appointmentIdToExclude: existing.id
-        });
+        if (item.staffUserIds?.length) {
+          await checkStaffAvailability({
+            salonId: req.salonId,
+            branchId: req.body.branchId,
+            staffMembershipIds: item.staffUserIds,
+            startAt: item.startAt,
+            endAt: item.endAt,
+            appointmentIdToExclude: existing.id
+          });
+        }
       }
 
       await prisma.$transaction(async (tx) => {
@@ -503,13 +528,14 @@ export const registerAppointmentRoutes = (ownerRouter) => {
       if (!appointment) return res.status(404).json({ message: "Appointment not found" });
 
       await prisma.$transaction(async (tx) => {
-        // Update appointment times
+        // Update appointment times and staff
         await tx.appointment.update({
           where: { id: appointment.id },
           data: { 
             startAt: new Date(startAt), 
             endAt: new Date(endAt),
-            status: "CONFIRMED"
+            status: "CONFIRMED",
+            primaryStaffUserId: staffId || null
           }
         });
 

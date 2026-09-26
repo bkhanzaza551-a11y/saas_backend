@@ -176,13 +176,59 @@ export const registerMissingOwnerRoutes = (ownerRouter) => {
   // 6. WhatsApp Credits Purchase
   ownerRouter.post("/credits/create-order", async (req, res) => {
     try {
-      const { packageId, amount } = req.body;
+      const { packageId } = req.body;
+      
+      const whatsappPackages = [
+        { id: 'wa_starter', amount: 499 },
+        { id: 'wa_growth', amount: 1999 },
+        { id: 'wa_volume', amount: 3499 }
+      ];
+      const smsPackages = [
+        { id: 'sms_starter', amount: 299 },
+        { id: 'sms_growth', amount: 999 },
+        { id: 'sms_volume', amount: 1999 }
+      ];
+      
+      let pkg = whatsappPackages.find(p => p.id === packageId) || smsPackages.find(p => p.id === packageId);
+      if (!pkg && req.body.amount) {
+        pkg = { id: 'custom', amount: req.body.amount };
+      }
+      
+      const keyId = process.env.RAZORPAY_KEY_ID;
+      const keySecret = process.env.RAZORPAY_SECRET_KEY;
+      if (!keyId || !keySecret) {
+        return res.json({
+          success: true,
+          orderId: `order_cred_${Date.now()}`,
+          amount: Number(pkg?.amount || 500) * 100,
+          currency: "INR",
+          key: "rzp_test_mock"
+        });
+      }
+
+      const authHeader = `Basic ${Buffer.from(`${keyId}:${keySecret}`).toString("base64")}`;
+      const response = await fetch("https://api.razorpay.com/v1/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": authHeader },
+        body: JSON.stringify({
+          amount: Math.round(Number(pkg?.amount || req.body.amount || 500) * 100),
+          currency: "INR",
+          receipt: `cred_${Date.now()}`
+        })
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        return res.status(400).json({ message: err.error?.description || "Razorpay error" });
+      }
+
+      const order = await response.json();
       res.json({
         success: true,
-        orderId: `order_cred_${Date.now()}`,
-        amount: Number(amount || 500) * 100,
-        currency: "INR",
-        keyId: process.env.RAZORPAY_KEY_ID || "rzp_test_mock"
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency,
+        key: keyId
       });
     } catch (e) {
       res.status(500).json({ message: "Failed to create credits recharge order" });

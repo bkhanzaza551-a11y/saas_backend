@@ -228,7 +228,7 @@ const cartItemSchema = z.object({
 
 const appointmentServiceItemSchema = z.object({
   serviceId: idSchema,
-  staffUserIds: z.array(idSchema).min(1),
+  staffUserIds: z.array(idSchema).optional().default([]),
   startAt: requiredDateString,
   endAt: requiredDateString,
   notes: optionalString
@@ -418,7 +418,8 @@ export const schemas = {
     body: z.object({
       name: z.string().trim().min(2).max(200),
       email: emailLikeSchema,
-      password: z.string().min(8).max(128),
+      password: z.string().min(6).max(128).optional(),
+      otpCode: z.string().optional(),
       salonRole: z.enum(["SALON_OWNER", "MANAGER", "RECEPTIONIST", "STAFF", "INVENTORY_MANAGER", "ACCOUNTANT"]),
       branchId: z.string().optional(),
       customRoleId: z.string().optional(),
