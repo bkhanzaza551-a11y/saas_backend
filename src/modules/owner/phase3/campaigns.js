@@ -6,7 +6,56 @@ import { requireFeatureEnabled, requireSalonPermission } from "../../../middlewa
 import { schemas, validate } from "../../../middlewares/validate.js";
 
 const includeCampaign = {
-  logs: { orderBy: { createdAt: "desc" } }
+  logs: { orderBy: { createdAt: "desc" } },
+  conversions: true,
+  whatsappLogs: true
+};
+
+export const formatCampaignResponse = (c) => {
+  if (!c) return c;
+  let sentCount = 0;
+
+  // 1. Check Campaign Logs for dispatched counts
+  if (Array.isArray(c.logs)) {
+    for (const log of c.logs) {
+      if (typeof log.details === "string") {
+        const match = log.details.match(/sent\s*(\d+)/i);
+        if (match) {
+          sentCount = parseInt(match[1], 10);
+          break;
+        }
+      }
+    }
+  }
+
+  // 2. Check WhatsApp Logs if WhatsApp campaign
+  if (sentCount === 0 && Array.isArray(c.whatsappLogs) && c.whatsappLogs.length > 0) {
+    const validLogs = c.whatsappLogs.filter((w) => w.status === "SENT" || w.status === "DELIVERED" || w.status === "READ" || !w.status);
+    sentCount = validLogs.length || c.whatsappLogs.length;
+  }
+
+  // 3. Fallback for SENT status
+  if (sentCount === 0 && c.status === "SENT") {
+    const audMeta = c.audienceMeta || {};
+    if (Array.isArray(audMeta.selectedIds) && audMeta.selectedIds.length > 0) {
+      sentCount = audMeta.selectedIds.length;
+    } else if (typeof audMeta.audienceCount === "number" && audMeta.audienceCount > 0) {
+      sentCount = audMeta.audienceCount;
+    } else {
+      sentCount = 1;
+    }
+  }
+
+  // Calculate Revenue
+  const revenue = Array.isArray(c.conversions)
+    ? c.conversions.reduce((acc, conv) => acc + (Number(conv.revenue || conv.conversionValue || conv.revenueAmount || 0) || 0), 0)
+    : 0;
+
+  return {
+    ...c,
+    sentCount,
+    revenue
+  };
 };
 
 export const registerCampaignRoutes = (ownerRouter) => {
@@ -47,7 +96,7 @@ export const registerCampaignRoutes = (ownerRouter) => {
     const status = String(req.query.status || "").trim();
     const type = String(req.query.type || "").trim();
     const audienceFilter = String(req.query.audienceFilter || "").trim();
-    res.json(await prisma.campaign.findMany({
+    const rows = await prisma.campaign.findMany({
       where: {
         salonId: req.salonId,
         ...(status ? { status } : {}),
@@ -64,23 +113,26 @@ export const registerCampaignRoutes = (ownerRouter) => {
       },
       include: includeCampaign,
       orderBy: { createdAt: "desc" }
-    }));
+    });
+    res.json(rows.map(formatCampaignResponse));
   });
   ownerRouter.post("/campaigns", requireFeatureEnabled("campaigns"), requireSalonPermission("campaigns", "create"), validate(schemas.campaign), async (req, res) => {
     const audienceMetaError = getCampaignAudienceMetaError(req.body);
     if (audienceMetaError) return res.status(400).json({ message: audienceMetaError });
     const audience = await getCampaignAudience(req.salonId, req.body.audienceFilter, req.body.audienceMeta || {});
+    const isDraft = Boolean(req.body.isDraft);
+    const isScheduled = Boolean(req.body.scheduledFor);
     const created = await prisma.campaign.create({
       data: {
         salonId: req.salonId,
         name: req.body.name,
         type: req.body.type,
-        status: req.body.scheduledFor ? "SCHEDULED" : "DRAFT",
+        status: isScheduled ? "SCHEDULED" : (isDraft ? "DRAFT" : "DRAFT"),
         audienceFilter: req.body.audienceFilter,
         audienceMeta: { ...(req.body.audienceMeta || {}), audienceCount: audience.length },
         message: req.body.message || null,
         bannerUrl: req.body.bannerUrl || null,
-        scheduledFor: req.body.scheduledFor ? new Date(req.body.scheduledFor) : null,
+        scheduledFor: isScheduled ? new Date(req.body.scheduledFor) : null,
         logs: {
           create: {
             eventType: "CREATED",
@@ -90,15 +142,35 @@ export const registerCampaignRoutes = (ownerRouter) => {
       },
       include: includeCampaign
     });
-    res.status(201).json(created);
+
+    if (!isDraft && !isScheduled) {
+      try {
+        await dispatchCampaign({
+          salonId: req.salonId,
+          campaignId: created.id,
+          actorUserId: req.user?.userId,
+          actorMembershipId: req.user?.membershipId
+        });
+        const finalRow = await prisma.campaign.findFirst({
+          where: { id: created.id, salonId: req.salonId },
+          include: includeCampaign
+        });
+        return res.status(201).json(formatCampaignResponse(finalRow || created));
+      } catch (err) {
+        console.error("Auto dispatch campaign failed:", err);
+      }
+    }
+
+    res.status(201).json(formatCampaignResponse(created));
   });
   ownerRouter.get("/campaigns/:id", requireFeatureEnabled("campaigns"), requireSalonPermission("campaigns", "view"), async (req, res) => {
     const row = await prisma.campaign.findFirst({ where: { id: req.params.id, salonId: req.salonId }, include: includeCampaign });
     if (!row) return res.status(404).json({ message: "Campaign not found" });
     const audience = await getCampaignAudience(req.salonId, row.audienceFilter, row.audienceMeta || {});
     const { reachable, unreachable } = splitAudienceByReachability(row, audience);
+    const formatted = formatCampaignResponse(row);
     res.json({
-      ...row,
+      ...formatted,
       audiencePreview: reachable.slice(0, 20),
       reachableAudienceCount: reachable.length,
       unreachableAudienceCount: unreachable.length,

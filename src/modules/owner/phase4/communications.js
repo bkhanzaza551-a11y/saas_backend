@@ -54,11 +54,39 @@ export const registerCommunicationRoutes = (ownerRouter) => {
   });
 
   ownerRouter.get("/campaigns/:id/performance", requireFeatureEnabled("campaignAnalytics"), requireSalonPermission("campaignAnalytics", "view"), async (req, res) => {
-    const campaign = await prisma.campaign.findFirst({ where: { id: req.params.id, salonId: req.salonId }, include: { logs: true, conversions: true } });
+    const campaign = await prisma.campaign.findFirst({ where: { id: req.params.id, salonId: req.salonId }, include: { logs: true, conversions: true, whatsappLogs: true } });
     if (!campaign) return res.status(404).json({ message: "Campaign not found" });
+
+    let sentCount = 0;
+    if (Array.isArray(campaign.logs)) {
+      for (const log of campaign.logs) {
+        if (typeof log.details === "string") {
+          const match = log.details.match(/sent\s*(\d+)/i);
+          if (match) {
+            sentCount = parseInt(match[1], 10);
+            break;
+          }
+        }
+      }
+    }
+    if (sentCount === 0 && Array.isArray(campaign.whatsappLogs) && campaign.whatsappLogs.length > 0) {
+      const validLogs = campaign.whatsappLogs.filter((w) => w.status === "SENT" || w.status === "DELIVERED" || w.status === "READ" || !w.status);
+      sentCount = validLogs.length || campaign.whatsappLogs.length;
+    }
+    if (sentCount === 0 && campaign.status === "SENT") {
+      const audMeta = campaign.audienceMeta || {};
+      if (Array.isArray(audMeta.selectedIds) && audMeta.selectedIds.length > 0) {
+        sentCount = audMeta.selectedIds.length;
+      } else if (typeof audMeta.audienceCount === "number" && audMeta.audienceCount > 0) {
+        sentCount = audMeta.audienceCount;
+      } else {
+        sentCount = 1;
+      }
+    }
+
     res.json({
       campaign,
-      sentCount: campaign.logs.filter((row) => row.eventType.includes("SENT")).length,
+      sentCount,
       conversionCount: campaign.conversions.length
     });
   });
