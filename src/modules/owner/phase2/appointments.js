@@ -264,6 +264,20 @@ export const registerAppointmentRoutes = (ownerRouter) => {
       const settings = await prisma.appointmentSetting.findFirst({ where: { salonId: req.salonId, branchId: body.branchId } })
         || await prisma.appointmentSetting.findFirst({ where: { salonId: req.salonId, branchId: null } });
 
+      // Check for rapid duplicate submission (within 3 seconds)
+      const recentDuplicate = await prisma.appointment.findFirst({
+        where: {
+          salonId: req.salonId,
+          customerId: body.customerId,
+          branchId: body.branchId,
+          startAt: new Date(body.startAt),
+          createdAt: { gte: new Date(Date.now() - 3000) }
+        }
+      });
+      if (recentDuplicate) {
+        return res.json(await fetchAppointment(req.salonId, recentDuplicate.id));
+      }
+
       const createdId = await prisma.$transaction(async (tx) => {
         const appointment = await tx.appointment.create({
           data: {
