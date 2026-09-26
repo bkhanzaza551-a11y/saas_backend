@@ -75,9 +75,11 @@ export const assignAppointmentItems = async (tx, appointmentId, items) => {
         notes: item.notes || null
       }
     });
-    await tx.appointmentServiceStaff.createMany({
-      data: item.staffUserIds.map((userSalonId) => ({ appointmentServiceId: createdItem.id, userSalonId })),
-      skipDuplicates: true
-    });
+    if (Array.isArray(item.staffUserIds) && item.staffUserIds.filter(Boolean).length > 0) {
+      await tx.appointmentServiceStaff.createMany({
+        data: item.staffUserIds.filter(Boolean).map((userSalonId) => ({ appointmentServiceId: createdItem.id, userSalonId })),
+        skipDuplicates: true
+      });
+    }
   }
 };

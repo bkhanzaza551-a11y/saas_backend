@@ -559,7 +559,7 @@ export const schemas = {
     body: z.object({
       customerId: idSchema,
       branchId: idSchema,
-      primaryStaffUserId: z.string().optional(),
+      primaryStaffUserId: z.string().nullable().optional(),
       title: optionalString,
       bookingChannel: z.enum(["WALK_IN", "PHONE", "ONLINE_PLACEHOLDER", "MANUAL"]).default("MANUAL"),
       status: z.enum(["PENDING", "CONFIRMED", "CHECKED_IN", "IN_PROGRESS", "COMPLETED", "CANCELLED", "NO_SHOW"]).optional(),
@@ -936,7 +936,7 @@ export const schemas = {
       customerPhone: indianPhoneSchema,
       customerEmail: optionalEmailLike,
       branchId: idSchema,
-      primaryStaffUserId: z.string().optional(),
+      primaryStaffUserId: z.string().nullable().optional(),
       startAt: requiredDateString,
       endAt: requiredDateString,
       notes: optionalString,
