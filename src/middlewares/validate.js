@@ -1172,6 +1172,7 @@ export const schemas = {
       name: z.string().min(2),
       phone: indianPhoneSchema,
       email: optionalEmailLike,
+      gender: optionalString,
       source: z.enum(["WEBSITE", "WHATSAPP", "PHONE", "WALK_IN", "INSTAGRAM", "FACEBOOK", "ADS", "REFERRAL", "ONLINE", "OTHERS"]),
       interestedServiceId: z.string().nullable().optional(),
       interestedBranchId: z.string().nullable().optional(),

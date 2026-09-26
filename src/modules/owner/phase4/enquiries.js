@@ -26,12 +26,57 @@ export const registerEnquiryRoutes = (ownerRouter) => {
     };
     res.json(await prisma.enquiry.findMany({
       where,
-      include: { interestedService: true, interestedBranch: true, assignedToMembership: { include: { user: true } }, followUps: { orderBy: { createdAt: "desc" } } },
+      include: { interestedService: true, interestedBranch: true, assignedToMembership: { include: { user: true } }, convertedCustomer: true, followUps: { orderBy: { createdAt: "desc" } } },
       orderBy: { createdAt: "desc" }
     }));
   });
 
   ownerRouter.post("/enquiries", requireFeatureEnabled("enquiries"), requireSalonPermission("enquiries", "create"), validate(schemas.enquiry), async (req, res) => {
+    const rawGender = (req.body.gender || "FEMALE").toUpperCase();
+    const gender = ["MALE", "FEMALE", "OTHER"].includes(rawGender) ? rawGender : "OTHER";
+
+    // Auto-sync customer database so lead is automatically present in customers table
+    let customerId = null;
+    if (req.body.phone) {
+      try {
+        const cleanPhone = String(req.body.phone).trim();
+        let existingCustomer = await prisma.customer.findFirst({
+          where: { salonId: req.salonId, phone: cleanPhone }
+        });
+        if (!existingCustomer) {
+          existingCustomer = await prisma.customer.create({
+            data: {
+              salonId: req.salonId,
+              branchId: req.body.interestedBranchId || null,
+              name: req.body.name?.trim() || "Walk-in Lead",
+              phone: cleanPhone,
+              email: req.body.email?.trim() || null,
+              gender: gender,
+              source: req.body.source || "WALK_IN",
+              notes: req.body.notes || "Auto-created from Enquiry"
+            }
+          });
+        } else {
+          const updateData = {};
+          if (gender && gender !== "OTHER" && (!existingCustomer.gender || existingCustomer.gender === "OTHER")) {
+            updateData.gender = gender;
+          }
+          if (req.body.email?.trim() && !existingCustomer.email) {
+            updateData.email = req.body.email.trim();
+          }
+          if (Object.keys(updateData).length > 0) {
+            existingCustomer = await prisma.customer.update({
+              where: { id: existingCustomer.id },
+              data: updateData
+            });
+          }
+        }
+        customerId = existingCustomer?.id || null;
+      } catch (err) {
+        console.warn("Auto-sync customer warning:", err.message);
+      }
+    }
+
     const row = await prisma.enquiry.create({
       data: {
         salonId: req.salonId,
@@ -45,35 +90,11 @@ export const registerEnquiryRoutes = (ownerRouter) => {
         priority: req.body.priority || "MEDIUM",
         assignedToMembershipId: req.body.assignedToMembershipId || null,
         createdByMembershipId: req.user.membershipId || null,
+        convertedCustomerId: customerId,
         followUpAt: toDate(req.body.followUpAt),
         notes: req.body.notes || null
       }
     });
-
-    // Auto-sync customer database so lead is automatically present in customers table
-    if (row.phone) {
-      try {
-        const cleanPhone = String(row.phone).trim();
-        const existingCustomer = await prisma.customer.findFirst({
-          where: { salonId: req.salonId, phone: cleanPhone }
-        });
-        if (!existingCustomer) {
-          await prisma.customer.create({
-            data: {
-              salonId: req.salonId,
-              name: row.name?.trim() || "Walk-in Lead",
-              phone: cleanPhone,
-              email: row.email?.trim() || null,
-              gender: "OTHER",
-              source: row.source || "WALK_IN",
-              notes: row.notes || "Auto-created from Enquiry"
-            }
-          });
-        }
-      } catch (err) {
-        console.warn("Auto-sync customer warning:", err.message);
-      }
-    }
 
     if (row.followUpAt) {
       await createStaffNotification({
