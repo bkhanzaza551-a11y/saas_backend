@@ -116,43 +116,64 @@ const gupshupSend = async ({ to, message, senderId }) => {
 /* ── SMSLogin ──────────────────────────────────────────────────────── */
 const smsloginSend = async ({ to, message, senderId }) => {
   const apiKey = process.env.SMSLOGIN_API_KEY;
-  const sender = senderId || process.env.SMSLOGIN_SENDER_ID;
-  const username = process.env.SMSLOGIN_USERNAME || "";
+  const sender = senderId || process.env.SMSLOGIN_SENDER_ID || "SAONST";
+  const username = process.env.SMSLOGIN_USERNAME || "SALONEST";
   const templateId = process.env.SMSLOGIN_TEMPLATE_ID;
 
-  if (!apiKey || !sender) {
+  if (!apiKey && !username) {
     throw new Error("SMSLogin credentials missing: set SMSLOGIN_API_KEY and SMSLOGIN_SENDER_ID");
   }
 
-  const phone = String(to).replace(/[^\d]/g, "");
-  // Standard generic API endpoint - update SMSLOGIN_API_URL in env if different
-  const baseUrl = process.env.SMSLOGIN_API_URL || "https://smslogin.in/api/send_http.php";
+  let phone = String(to).replace(/[^\d]/g, "");
+  if (phone.length === 12 && phone.startsWith("91")) phone = phone.slice(2);
+  if (phone.length === 11 && phone.startsWith("0")) phone = phone.slice(1);
+
+  const baseUrl = process.env.SMSLOGIN_API_URL || "http://smslogin.in/api/mt/SendSMS";
   
   const params = new URLSearchParams({
-    authkey: apiKey, // Some portals use authkey, others apikey
-    apikey: apiKey,
-    username: username,
+    APIKey: apiKey || "",
+    apikey: apiKey || "",
+    authkey: apiKey || "",
+    user: username,
+    password: apiKey || "",
     senderid: sender,
     sender: sender,
+    channel: process.env.SMSLOGIN_CHANNEL || "2",
+    DCS: "0",
+    flashsms: "0",
+    number: phone,
     mobiles: phone,
+    text: message,
     message: message,
-    route: "4" // typically transactional route
+    route: process.env.SMSLOGIN_ROUTE || "1"
   });
 
-  if (templateId) params.append("template_id", templateId);
-  if (templateId) params.append("DLT_TE_ID", templateId);
+  if (templateId) {
+    params.append("template_id", templateId);
+    params.append("DLT_TE_ID", templateId);
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SMS_TIMEOUT_MS);
 
   try {
-    const res = await fetch(`${baseUrl}?${params}`, {
+    const res = await fetch(`${baseUrl}?${params.toString()}`, {
       method: "GET",
       signal: controller.signal
     });
     const data = await res.text();
     if (!res.ok) throw new Error(`SMSLogin HTTP ${res.status}: ${data}`);
     
+    // Check for JSON error code from SMSLogin gateway
+    try {
+      const parsed = JSON.parse(data);
+      if (parsed.ErrorCode && parsed.ErrorCode !== "000" && parsed.ErrorCode !== "0") {
+        throw new Error(`SMSLogin Error ${parsed.ErrorCode}: ${parsed.ErrorMessage || "SMS gateway rejected request"}`);
+      }
+    } catch (e) {
+      if (e.message.startsWith("SMSLogin Error")) throw e;
+    }
+
     return { success: true, provider: "smslogin", messageId: `smslogin_${Date.now()}`, rawResponse: data };
   } finally {
     clearTimeout(timer);
@@ -180,15 +201,25 @@ export const sendSms = async ({ salonId, to, message, senderId }) => {
   if (!to || !message) {
     return { success: false, error: "to and message are required" };
   }
-  const settings = await prisma.salonSetting.findFirst({
-    where: { salonId, branchId: null },
-    select: { smsSettings: true }
-  });
+  const settings = salonId
+    ? await prisma.salonSetting.findFirst({
+        where: { salonId, branchId: null },
+        select: { smsSettings: true }
+      }).catch(() => null)
+    : null;
+
   const smsSettings = settings?.smsSettings && typeof settings.smsSettings === "object"
     ? settings.smsSettings
-    : { gatewayProvider: "stub", senderId: null, apiKey: null };
+    : { gatewayProvider: null, senderId: null, apiKey: null };
 
-  const providerName = smsSettings.gatewayProvider || "stub";
+  const defaultProvider = process.env.SMSLOGIN_API_KEY
+    ? "smslogin"
+    : (process.env.TWILIO_ACCOUNT_SID ? "twilio" : (process.env.MSG91_AUTH_KEY ? "msg91" : "stub"));
+
+  const providerName = smsSettings.gatewayProvider && smsSettings.gatewayProvider !== "stub"
+    ? smsSettings.gatewayProvider
+    : defaultProvider;
+
   const provider = getProvider(providerName);
 
   try {
