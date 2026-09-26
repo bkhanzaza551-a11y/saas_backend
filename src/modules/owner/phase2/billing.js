@@ -1378,9 +1378,18 @@ const pdfSafe = (str) => {
     const statusBg = { PAID: "#dcfce7", UNPAID: "#fef2f2", PARTIAL: "#fffbeb", CANCELLED: "#f1f5f9", STARTED: "#dbeafe" }[statusUp] || "#f1f5f9";
 
     const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Invoice ${inv.invoiceNumber}</title>
-<style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');*{margin:0;padding:0;box-sizing:border-box;}</style>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+*{margin:0;padding:0;box-sizing:border-box;}
+@media print {
+  @page { margin: 0; size: 80mm auto; }
+  body { background: transparent !important; padding: 0 !important; display: block !important; align-items: flex-start !important; justify-content: flex-start !important; margin: 0 !important; }
+  .receipt-wrapper { box-shadow: none !important; border-radius: 0 !important; width: 100% !important; max-width: 100% !important; margin: 0 !important; padding: 10px !important; }
+  .receipt-svg-bottom { display: none !important; }
+}
+</style>
 </head><body style="font-family:'Inter',sans-serif;background:#1e293b;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:32px 16px;">
-<div style="width:380px;max-width:100%;background:#fff;border-radius:16px;box-shadow:0 25px 60px -12px rgba(0,0,0,0.35);overflow:hidden;">
+<div class="receipt-wrapper" style="width:380px;max-width:100%;background:#fff;border-radius:16px;box-shadow:0 25px 60px -12px rgba(0,0,0,0.35);overflow:hidden;margin:0 auto;">
   <div style="padding:0 24px 24px;">
     <div style="text-align:center;padding:20px 0 4px;">
       <div style="font-size:26px;font-weight:900;letter-spacing:3px;color:#0f172a;">${escapeHtml(salonName.toUpperCase())}</div>
@@ -1418,7 +1427,7 @@ const pdfSafe = (str) => {
       <div style="font-size:9px;color:#cbd5e1;margin-top:8px;letter-spacing:2px;font-family:'Courier New',monospace;">${inv.invoiceNumber || "—"}</div>
     </div>
   </div>
-  <svg viewBox="0 0 380 16" preserveAspectRatio="none" style="display:block;width:100%;height:16px;"><polygon points="0,0 19,16 38,0 57,16 76,0 95,16 114,0 133,16 152,0 171,16 190,0 209,16 228,0 247,16 266,0 285,16 304,0 323,16 342,0 361,16 380,0 380,16 0,16" fill="#fff"/><polyline points="0,0 19,16 38,0 57,16 76,0 95,16 114,0 133,16 152,0 171,16 190,0 209,16 228,0 247,16 266,0 285,16 304,0 323,16 342,0 361,16 380,0" fill="none" stroke="#e2e8f0" stroke-width="1"/></svg>
+  <svg class="receipt-svg-bottom" viewBox="0 0 380 16" preserveAspectRatio="none" style="display:block;width:100%;height:16px;"><polygon points="0,0 19,16 38,0 57,16 76,0 95,16 114,0 133,16 152,0 171,16 190,0 209,16 228,0 247,16 266,0 285,16 304,0 323,16 342,0 361,16 380,0 380,16 0,16" fill="#fff"/><polyline points="0,0 19,16 38,0 57,16 76,0 95,16 114,0 133,16 152,0 171,16 190,0 209,16 228,0 247,16 266,0 285,16 304,0 323,16 342,0 361,16 380,0" fill="none" stroke="#e2e8f0" stroke-width="1"/></svg>
 </div>
 </body></html>`;
     res.setHeader("Content-Type", "text/html");
