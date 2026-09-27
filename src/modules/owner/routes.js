@@ -3026,14 +3026,7 @@ ownerRouter.post("/verify-phone/send", async (req, res) => {
   phoneOtpStore.set(key, { otpCode, expiresAt: Date.now() + PHONE_OTP_TTL_MS, attempts: 0 });
 
   let channel = "sms";
-    let delivered = false;
-    try {
-      const { sendWhatsApp } = await import("../../lib/whatsappService.js");
-      const waResult = await sendWhatsApp({ salonId: req.user.salonId, to: phone, message: `Your Salon Nest verification code is ${otpCode}. It expires in 5 minutes.` });
-      if (!waResult.success) throw new Error("WA Failed");
-      delivered = true;
-      channel = "whatsapp";
-    } catch {
+      let delivered = false;
       try {
         const { sendSms } = await import("../../lib/smsService.js");
         const smsResult = await sendSms({ salonId: req.user.salonId, to: phone, message: `Your Salon Nest verification code is ${otpCode}. It expires in 5 minutes.` });
@@ -3041,9 +3034,16 @@ ownerRouter.post("/verify-phone/send", async (req, res) => {
         delivered = true;
         channel = "sms";
       } catch {
-        delivered = false;
+        try {
+          const { sendWhatsApp } = await import("../../lib/whatsappService.js");
+          const waResult = await sendWhatsApp({ salonId: req.user.salonId, to: phone, message: `Your Salon Nest verification code is ${otpCode}. It expires in 5 minutes.` });
+          if (!waResult.success) throw new Error("WA Failed");
+          delivered = true;
+          channel = "whatsapp";
+        } catch {
+          delivered = false;
+        }
       }
-    }
 
   return res.json({
     message: delivered
