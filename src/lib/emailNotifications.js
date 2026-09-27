@@ -654,7 +654,8 @@ export const attemptCustomerTemplateEmail = async ({ salonId, toEmail, templateT
 
     const variables = await resolveTemplateContext(salonId, context);
     const textContent = renderTemplateText(template.content, variables);
-    const subject = template.title || "Salon update";
+    const subjectRaw = template.title || "Salon update";
+    const subject = renderTemplateText(subjectRaw, variables);
     
     const html = buildEmailHtml(textContent, variables);
 
