@@ -363,6 +363,7 @@ model Salon {
   affiliateWallets      AffiliateCreditWallet[]
   affiliateTransactions AffiliateCreditTransaction[]
   payoutRequests        CreditPayoutRequest[]
+  financeTransactions   FinanceTransaction[]
 }
 
 model UserSalon {
@@ -2416,5 +2417,24 @@ model ProductRequirement {
   branch      Branch?  @relation(fields: [branchId], references: [id])
 }
 
+model FinanceTransaction {
+  id            String   @id @default(cuid())
+  transactionId String   @unique
+  salonId       String?
+  paymentFor    String   @default("Subscription")
+  amount        Decimal  @db.Decimal(10, 2)
+  paymentMethod String   @default("ONLINE")
+  paymentStatus String   @default("COMPLETED")
+  paymentDate   DateTime @default(now())
+  reference     String?
+  notes         String?
+  createdById   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  salon         Salon?   @relation(fields: [salonId], references: [id], onDelete: SetNull)
 
-
+  @@index([salonId])
+  @@index([paymentStatus])
+  @@index([paymentFor])
+  @@index([paymentDate])
+}
