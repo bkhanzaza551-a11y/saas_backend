@@ -115,42 +115,32 @@ const gupshupSend = async ({ to, message, senderId }) => {
 
 /* ── SMSLogin ──────────────────────────────────────────────────────── */
 const smsloginSend = async ({ to, message, senderId }) => {
-  const apiKey = process.env.SMSLOGIN_API_KEY;
+  const apiKey = process.env.SMSLOGIN_API_KEY || "a6c1394e8d00ba6fe1f6";
   const sender = senderId || process.env.SMSLOGIN_SENDER_ID || "SAONST";
   const username = process.env.SMSLOGIN_USERNAME || "SALONEST";
   const templateId = process.env.SMSLOGIN_TEMPLATE_ID;
 
-  if (!apiKey && !username) {
-    throw new Error("SMSLogin credentials missing: set SMSLOGIN_API_KEY and SMSLOGIN_SENDER_ID");
+  if (!apiKey || !username) {
+    throw new Error("SMSLogin credentials missing: set SMSLOGIN_API_KEY and SMSLOGIN_USERNAME");
   }
 
-  let phone = String(to).replace(/[^\d]/g, "");
-  if (phone.length === 12 && phone.startsWith("91")) phone = phone.slice(2);
-  if (phone.length === 11 && phone.startsWith("0")) phone = phone.slice(1);
+  // Format mobile: recipient mobile number with country code (e.g. 917747911593)
+  let rawPhone = String(to).replace(/[^\d]/g, "");
+  if (rawPhone.length === 10) rawPhone = `91${rawPhone}`;
+  if (rawPhone.length === 11 && rawPhone.startsWith("0")) rawPhone = `91${rawPhone.slice(1)}`;
 
-  const baseUrl = process.env.SMSLOGIN_API_URL || "http://smslogin.in/api/mt/SendSMS";
-  
+  const baseUrl = process.env.SMSLOGIN_API_URL || "https://smslogin.co/v3/api.php";
+
   const params = new URLSearchParams({
-    APIKey: apiKey || "",
-    apikey: apiKey || "",
-    authkey: apiKey || "",
-    user: username,
-    password: apiKey || "",
+    username,
+    apikey: apiKey,
     senderid: sender,
-    sender: sender,
-    channel: process.env.SMSLOGIN_CHANNEL || "2",
-    DCS: "0",
-    flashsms: "0",
-    number: phone,
-    mobiles: phone,
-    text: message,
-    message: message,
-    route: process.env.SMSLOGIN_ROUTE || "1"
+    mobile: rawPhone,
+    message
   });
 
   if (templateId) {
-    params.append("template_id", templateId);
-    params.append("DLT_TE_ID", templateId);
+    params.append("templateid", templateId);
   }
 
   const controller = new AbortController();
@@ -163,15 +153,16 @@ const smsloginSend = async ({ to, message, senderId }) => {
     });
     const data = await res.text();
     if (!res.ok) throw new Error(`SMSLogin HTTP ${res.status}: ${data}`);
-    
-    // Check for JSON error code from SMSLogin gateway
-    try {
-      const parsed = JSON.parse(data);
-      if (parsed.ErrorCode && parsed.ErrorCode !== "000" && parsed.ErrorCode !== "0") {
-        throw new Error(`SMSLogin Error ${parsed.ErrorCode}: ${parsed.ErrorMessage || "SMS gateway rejected request"}`);
-      }
-    } catch (e) {
-      if (e.message.startsWith("SMSLogin Error")) throw e;
+
+    // SMSLogin returns strings like "{'Error':'Invalid Template ID'}" or "{'success':'...'}"
+    if (data.includes("'Error':") || data.includes('"Error":') || data.includes("ErrorCode")) {
+      let errMsg = data;
+      try {
+        const jsonClean = data.replace(/'/g, '"');
+        const parsed = JSON.parse(jsonClean);
+        errMsg = parsed.Error || parsed.ErrorMessage || data;
+      } catch {}
+      throw new Error(`SMSLogin Gateway Error: ${errMsg}`);
     }
 
     return { success: true, provider: "smslogin", messageId: `smslogin_${Date.now()}`, rawResponse: data };
