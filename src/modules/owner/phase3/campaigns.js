@@ -1,7 +1,10 @@
 import { prisma } from "../../../lib/prisma.js";
 import { buildCsv } from "../../../lib/phase2.js";
 import { dispatchCampaign } from "../../../lib/emailAutomation.js";
-import { getCampaignAudience } from "../../../lib/phase3.js";
+import { getCampaignAudience, renderTemplateText, resolveTemplateContext } from "../../../lib/phase3.js";
+import { sendSms } from "../../../lib/smsService.js";
+import { sendWhatsApp } from "../../../lib/whatsappService.js";
+import { sendMail } from "../../../lib/mailer.js";
 import { requireFeatureEnabled, requireSalonPermission } from "../../../middlewares/rbac.js";
 import { schemas, validate } from "../../../middlewares/validate.js";
 
@@ -62,6 +65,12 @@ export const registerCampaignRoutes = (ownerRouter) => {
   const getCampaignAudienceMetaError = (body) => {
     if (body.audienceFilter === "SERVICE_BASED_CUSTOMERS" && !body.audienceMeta?.serviceId) {
       return "Service is required for service-based campaigns";
+    }
+    if (body.audienceFilter === "SELECTED") {
+      const selectedIds = body.audienceMeta?.selectedIds;
+      if (!Array.isArray(selectedIds) || selectedIds.length === 0) {
+        return "Select at least one customer for a selected audience";
+      }
     }
     return null;
   };
@@ -131,7 +140,7 @@ export const registerCampaignRoutes = (ownerRouter) => {
         audienceFilter: req.body.audienceFilter,
         audienceMeta: { ...(req.body.audienceMeta || {}), audienceCount: audience.length },
         message: req.body.message || null,
-        bannerUrl: req.body.bannerUrl || null,
+        bannerUrl: req.body.bannerUrl || req.body.imageUrl || null,
         scheduledFor: isScheduled ? new Date(req.body.scheduledFor) : null,
         logs: {
           create: {
@@ -163,6 +172,74 @@ export const registerCampaignRoutes = (ownerRouter) => {
 
     res.status(201).json(formatCampaignResponse(created));
   });
+  ownerRouter.post("/campaigns/test", requireFeatureEnabled("campaigns"), requireSalonPermission("campaigns", "create"), async (req, res) => {
+    try {
+      const channel = String(req.body?.channel || "").toUpperCase();
+      if (!["WHATSAPP", "SMS", "EMAIL"].includes(channel)) {
+        return res.status(400).json({ message: "Channel must be WHATSAPP, SMS or EMAIL" });
+      }
+
+      const to = String(req.body?.testNumber || "").trim();
+      if (!to) return res.status(400).json({ message: "testNumber is required" });
+
+      const rawMessage = String(req.body?.message || "").trim();
+      if (!rawMessage) return res.status(400).json({ message: "Message is required" });
+
+      if (channel === "EMAIL" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+        return res.status(400).json({ message: "Enter a valid email address" });
+      }
+
+      // Use a matching customer (when the test number belongs to the salon) so the
+      // preview renders real values instead of placeholders.
+      let customer = null;
+      if (channel !== "EMAIL") {
+        try {
+          customer = await prisma.customer.findFirst({
+            where: { salonId: req.salonId, phone: { equals: to, mode: "insensitive" } },
+            select: { id: true }
+          });
+        } catch {
+          customer = null;
+        }
+      }
+
+      const context = await resolveTemplateContext(req.salonId, customer ? { customerId: customer.id } : {});
+      const rendered = renderTemplateText(rawMessage, context);
+
+      if (channel === "EMAIL") {
+        const info = await sendMail({
+          to,
+          subject: req.body?.subject || "SalonNest test message",
+          html: `<div>${rendered}</div>`,
+          text: rendered
+        });
+        return res.json({ success: true, channel, to, renderedMessage: rendered, messageId: info?.messageId || info?.id || null });
+      }
+
+      if (channel === "WHATSAPP") {
+        const result = await sendWhatsApp({
+          salonId: req.salonId,
+          to,
+          message: rendered,
+          customerId: customer?.id || null,
+          imageUrl: req.body?.imageUrl || null
+        });
+        if (!result?.success) {
+          return res.status(502).json({ message: result?.error || "WhatsApp send failed", renderedMessage: rendered });
+        }
+        return res.json({ success: true, channel, to, renderedMessage: rendered, messageId: result.messageId || null });
+      }
+
+      const result = await sendSms({ salonId: req.salonId, to, message: rendered });
+      if (!result?.success) {
+        return res.status(502).json({ message: result?.error || "SMS send failed", renderedMessage: rendered });
+      }
+      return res.json({ success: true, channel, to, renderedMessage: rendered, messageId: result.messageId || null });
+    } catch (err) {
+      console.error("Campaign test send failed:", err);
+      return res.status(500).json({ message: err?.message || "Test send failed" });
+    }
+  });
   ownerRouter.get("/campaigns/:id", requireFeatureEnabled("campaigns"), requireSalonPermission("campaigns", "view"), async (req, res) => {
     const row = await prisma.campaign.findFirst({ where: { id: req.params.id, salonId: req.salonId }, include: includeCampaign });
     if (!row) return res.status(404).json({ message: "Campaign not found" });
@@ -191,7 +268,7 @@ export const registerCampaignRoutes = (ownerRouter) => {
         audienceFilter: req.body.audienceFilter,
         audienceMeta: { ...(req.body.audienceMeta || {}), audienceCount: audience.length },
         message: req.body.message || null,
-        bannerUrl: req.body.bannerUrl || null,
+        bannerUrl: req.body.bannerUrl || req.body.imageUrl || null,
         scheduledFor: req.body.scheduledFor ? new Date(req.body.scheduledFor) : null
       },
       include: includeCampaign

@@ -258,6 +258,7 @@ model User {
   isActive                 Boolean              @default(true)
   passwordSetupRequired    Boolean              @default(false)
   isDemoAccount            Boolean              @default(false)
+  isPhoneVerified          Boolean              @default(false)
   pagePermissions          Json?
   loginOtp                 String?
   loginOtpExpiry           DateTime?

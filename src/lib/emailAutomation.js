@@ -276,6 +276,105 @@ const sendCampaignEmail = async ({ salonId, campaign, customer }) => {
   });
 };
 
+export const CAMPAIGN_DISPATCHABLE_TYPES = ["EMAIL", "WHATSAPP", "SMS"];
+
+/**
+ * Reads the optional Meta WhatsApp template wiring stored on the campaign.
+ * Expected location: audienceMeta.whatsapp = { templateName, paramVars: [...] }
+ * with a fallback to the wizard draft state at audienceMeta.draftState.templateId.
+ */
+const getCampaignWhatsAppTemplateConfig = (campaign) => {
+  const meta = toPlainObject(campaign.audienceMeta);
+  const draft = toPlainObject(meta.draftState);
+  const config = toPlainObject(meta.whatsapp);
+
+  const templateName = config.templateName || config.templateId || meta.templateName || draft.templateId || null;
+  const paramVars = Array.isArray(config.paramVars)
+    ? config.paramVars
+    : (Array.isArray(meta.paramVars) ? meta.paramVars : null);
+
+  return { templateName: templateName || null, paramVars };
+};
+
+const sendCampaignWhatsApp = async ({ salonId, campaign, customer }) => {
+  const variables = await resolveTemplateContext(salonId, { customerId: customer.id });
+  const { templateName, paramVars } = getCampaignWhatsAppTemplateConfig(campaign);
+
+  // A Meta template is only usable when we know the ordered parameter list.
+  // Sending a template with placeholders but no params is rejected by Meta, so
+  // in that case fall back to rendered free text.
+  const useTemplate = Boolean(templateName) && Array.isArray(paramVars) && paramVars.length > 0;
+
+  // templateParams is an ordered array — its position defines {{1}}, {{2}}, ...
+  const templateParams = useTemplate
+    ? paramVars.map((key) => renderTemplateText(`{{${key}}}`, variables))
+    : [];
+
+  const renderedBody = renderTemplateText(campaign.message || "", variables, {
+    numberedVariables: templateParams.length ? templateParams : null
+  });
+
+  const result = await sendWhatsApp({
+    salonId,
+    to: customer.phone,
+    message: renderedBody,
+    customerId: customer.id,
+    campaignId: campaign.id,
+    templateName: useTemplate ? templateName : undefined,
+    templateParams: useTemplate ? templateParams : undefined,
+    imageUrl: campaign.bannerUrl || undefined
+  });
+
+  await prisma.whatsAppLog.create({
+    data: {
+      salonId,
+      customerId: customer.id,
+      campaignId: campaign.id,
+      phone: customer.phone,
+      templateType: useTemplate ? templateName : "campaign_free_text",
+      message: renderedBody,
+      status: result.success ? "SENT" : "FAILED",
+      metadata: {
+        channel: "WHATSAPP",
+        messageId: result.messageId || null,
+        error: result.error || null,
+        templateName: useTemplate ? templateName : null
+      }
+    }
+  }).catch(() => {});
+
+  return { ...result, renderedBody, templateName: useTemplate ? templateName : null };
+};
+
+const sendCampaignSms = async ({ salonId, campaign, customer }) => {
+  const variables = await resolveTemplateContext(salonId, { customerId: customer.id });
+  const renderedBody = renderTemplateText(campaign.message || "", variables);
+  const result = await sendSms({ salonId, to: customer.phone, message: renderedBody });
+  return { ...result, renderedBody };
+};
+
+/**
+ * Deducts message credits from salon advancedSettings. Credits are clamped at 0
+ * and never block a send — this only makes usage match the balance shown in the UI.
+ */
+const deductCampaignCredits = async (salonId, creditKey, count) => {
+  if (!count || count <= 0) return 0;
+  try {
+    const setting = await prisma.salonSetting.findFirst({ where: { salonId, branchId: null } });
+    if (!setting) return 0;
+    const advanced = toPlainObject(setting.advancedSettings);
+    const next = Math.max(0, toNumber(advanced[creditKey], 0) - count);
+    await prisma.salonSetting.update({
+      where: { id: setting.id },
+      data: { advancedSettings: { ...advanced, [creditKey]: next } }
+    });
+    return count;
+  } catch (err) {
+    console.error(`[campaigns] Failed to deduct ${creditKey}: ${err.message}`);
+    return 0;
+  }
+};
+
 export const dispatchCampaign = async ({
   salonId,
   campaignId,
@@ -307,9 +406,10 @@ export const dispatchCampaign = async ({
   }
 
   const deliveries = [];
-  let whatsappLink = null;
+  const whatsappLink = null;
+  const channel = campaign.type;
 
-  if (campaign.type === "EMAIL") {
+  if (channel === "EMAIL") {
     const results = await Promise.allSettled(
       reachable.map((customer) => sendCampaignEmail({ salonId, campaign, customer }))
     );
@@ -332,21 +432,15 @@ export const dispatchCampaign = async ({
         });
       }
     });
-  } else if (campaign.type === "WHATSAPP") {
+  } else if (channel === "WHATSAPP") {
     for (const customer of reachable) {
       try {
-        const result = await sendWhatsApp({
-          salonId,
-          to: customer.phone,
-          message: campaign.message || "",
-          customerId: customer.id,
-          campaignId: campaign.id
-        });
+        const result = await sendCampaignWhatsApp({ salonId, campaign, customer });
         deliveries.push({
           customerId: customer.id,
           customerName: customer.name,
           channel: "WHATSAPP",
-          success: result.success,
+          success: Boolean(result.success),
           error: result.error || null
         });
       } catch (err) {
@@ -359,17 +453,48 @@ export const dispatchCampaign = async ({
         });
       }
     }
+  } else if (channel === "SMS") {
+    for (const customer of reachable) {
+      try {
+        const result = await sendCampaignSms({ salonId, campaign, customer });
+        deliveries.push({
+          customerId: customer.id,
+          customerName: customer.name,
+          channel: "SMS",
+          success: Boolean(result.success),
+          error: result.error || null
+        });
+      } catch (err) {
+        deliveries.push({
+          customerId: customer.id,
+          customerName: customer.name,
+          channel: "SMS",
+          success: false,
+          error: err.message
+        });
+      }
+    }
+  } else {
+    const error = new Error(
+      `Campaign type ${channel} cannot be dispatched. Supported types: ${CAMPAIGN_DISPATCHABLE_TYPES.join(", ")}.`
+    );
+    error.status = 400;
+    throw error;
   }
 
   const sentCount = deliveries.filter((entry) => entry.success).length;
   const failedCount = deliveries.filter((entry) => !entry.success).length;
-  const status = campaign.type === "EMAIL"
-    ? sentCount > 0 && failedCount === 0
-      ? "SENT"
-      : sentCount > 0
-        ? "PARTIAL"
-        : "FAILED"
-    : "SENT";
+
+  // CampaignStatus only allows DRAFT | SCHEDULED | SENT | CANCELLED.
+  // Writing PARTIAL/FAILED here would violate the enum and throw on update,
+  // so the precise outcome is recorded in the log and audit metadata instead.
+  const status = "SENT";
+
+  const creditsDeducted = await deductCampaignCredits(
+    salonId,
+    channel === "WHATSAPP" ? "whatsappCredits" : channel === "SMS" ? "smsCredits" : "whatsappCredits",
+    channel === "EMAIL" ? 0 : sentCount
+  );
 
   const updatedCampaign = await prisma.campaign.update({
     where: { id: campaign.id },
@@ -382,7 +507,7 @@ export const dispatchCampaign = async ({
   await prisma.campaignLog.create({
     data: {
       campaignId: campaign.id,
-      eventType: campaign.type === "EMAIL" ? "EMAIL_DISPATCHED" : "WHATSAPP_DISPATCHED",
+      eventType: `${channel}_DISPATCHED`,
       details: `Audience matched ${audience.length}, reachable ${reachable.length}, sent ${sentCount}, failed ${failedCount}, skipped ${skipped.length}`
     }
   });
@@ -392,7 +517,7 @@ export const dispatchCampaign = async ({
     actorUserId,
     actorMembershipId,
     module: "CAMPAIGNS",
-    action: campaign.type === "EMAIL" ? "EMAIL_SENT" : "WHATSAPP_SENT",
+    action: `${channel}_SENT`,
     entityType: "Campaign",
     entityId: campaign.id,
     summary: `Campaign ${campaign.name} processed`,
@@ -402,7 +527,8 @@ export const dispatchCampaign = async ({
       reachableCount: reachable.length,
       sentCount,
       failedCount,
-      skippedCount: skipped.length
+      skippedCount: skipped.length,
+      creditsDeducted
     }
   });
 

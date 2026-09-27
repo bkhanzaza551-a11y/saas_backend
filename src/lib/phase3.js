@@ -586,11 +586,38 @@ const templateFallbacks = {
   payment_link: ""
 };
 
-export const renderTemplateText = (content, variables) =>
-  String(content || "").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => {
-    const value = variables?.[key];
-    return value == null || value === "" ? templateFallbacks[key] ?? "" : String(value);
-  });
+const resolveTemplateValue = (key, variables) => {
+  const value = variables?.[key];
+  return value == null || value === "" ? templateFallbacks[key] ?? "" : String(value);
+};
+
+/**
+ * Renders a template body for a single recipient.
+ *
+ * Supported placeholder syntaxes:
+ *   {{name}}  named variable, resolved from `variables`
+ *   [[name]]  named variable, editable-slot syntax used by the campaign wizard
+ *   {{1}}     Meta WhatsApp numbered placeholder, resolved from options.numberedVariables
+ *
+ * Numbered placeholders are left untouched when no numberedVariables array is
+ * supplied, so a Meta template body is never silently blanked out.
+ */
+export const renderTemplateText = (content, variables, options = {}) => {
+  const numbered = Array.isArray(options.numberedVariables) ? options.numberedVariables : null;
+
+  const resolveNumbered = (key) => {
+    if (!numbered) return `{{${key}}}`;
+    const value = numbered[Number(key) - 1];
+    return value == null || value === "" ? "" : String(value);
+  };
+
+  return String(content || "")
+    .replace(/\{\{\s*(\d+)\s*\}\}/g, (_, key) => resolveNumbered(key))
+    .replace(/\[\[\s*([a-zA-Z0-9_]+)\s*\]\]/g, (_, key) => resolveTemplateValue(key, variables))
+    .replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) =>
+      /^\d+$/.test(key) ? `{{${key}}}` : resolveTemplateValue(key, variables)
+    );
+};
 
 export const resolveTemplateContext = async (salonId, context = {}) => {
   const [salon, salonSetting, customer, appointment, invoice, order, membership, pack] = await Promise.all([
@@ -676,6 +703,17 @@ export const getCampaignAudience = async (salonId, audienceFilter, audienceMeta 
   const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
   const where = { salonId };
 
+  if (audienceFilter === "SELECTED") {
+    const selectedIds = Array.isArray(audienceMeta?.selectedIds)
+      ? audienceMeta.selectedIds.filter(Boolean)
+      : [];
+    if (!selectedIds.length) return [];
+    return prisma.customer.findMany({
+      where: { ...where, id: { in: selectedIds } },
+      orderBy: { createdAt: "desc" }
+    });
+  }
+
   if (audienceFilter === "BIRTHDAY_CUSTOMERS") {
     return prisma.customer.findMany({ where, orderBy: { createdAt: "desc" } }).then((rows) => rows.filter((row) => row.dateOfBirth && new Date(row.dateOfBirth).getMonth() === now.getMonth()));
   }
@@ -704,5 +742,12 @@ export const getCampaignAudience = async (salonId, audienceFilter, audienceMeta 
       }
     });
   }
-  return prisma.customer.findMany({ where, orderBy: { createdAt: "desc" } });
+  if (audienceFilter === "ALL_CUSTOMERS" || !audienceFilter) {
+    return prisma.customer.findMany({ where, orderBy: { createdAt: "desc" } });
+  }
+
+  // Any filter without a real implementation must never fall back to the whole
+  // customer list, otherwise a campaign silently broadcasts to everyone.
+  console.warn(`[campaigns] Audience filter "${audienceFilter}" is not supported yet — audience resolved to 0 customers.`);
+  return [];
 };

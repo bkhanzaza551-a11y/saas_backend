@@ -110,7 +110,7 @@ const createAuthResponse = async (user) => {
     data: {
       accessToken,
       refreshToken,
-      user: { id: user.id, name: user.name, systemRole: user.systemRole },
+      user: { id: user.id, name: user.name, systemRole: user.systemRole, isPhoneVerified: user.isPhoneVerified },
       activeMemberships: activeMemberships,
       membership: membership
         ? {
@@ -427,7 +427,7 @@ authRouter.get("/me", async (req, res) => {
   });
 
   return res.json({
-    user: { id: user.id, name: user.name, email: user.email, systemRole: user.systemRole },
+    user: { id: user.id, name: user.name, email: user.email, systemRole: user.systemRole, isPhoneVerified: user.isPhoneVerified },
     membership: membership ? { ...serializeMembership(membership), permissions: mergedPermissions, featureFlags: mergedFeatureFlags } : null,
     activeMemberships: activeMemberships.map(serializeMembership)
   });

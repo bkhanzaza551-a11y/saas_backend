@@ -1038,10 +1038,16 @@ export const schemas = {
     body: z.object({
       name: z.string().min(2),
       type: z.enum(["WHATSAPP", "SMS", "EMAIL", "SOCIAL_BANNER", "CATALOG_BANNER"]),
-      audienceFilter: z.enum(["ALL_CUSTOMERS", "BIRTHDAY_CUSTOMERS", "ANNIVERSARY_CUSTOMERS", "LOST_CUSTOMERS", "HIGH_SPENDERS", "MEMBERSHIP_CUSTOMERS", "PACKAGE_CUSTOMERS", "SERVICE_BASED_CUSTOMERS", "CRM_SEGMENT"]),
+      audienceFilter: z.enum(["ALL_CUSTOMERS", "BIRTHDAY_CUSTOMERS", "ANNIVERSARY_CUSTOMERS", "LOST_CUSTOMERS", "HIGH_SPENDERS", "MEMBERSHIP_CUSTOMERS", "PACKAGE_CUSTOMERS", "SERVICE_BASED_CUSTOMERS", "CRM_SEGMENT", "SELECTED"]),
       audienceMeta: z.any().optional(),
       message: optionalString,
       bannerUrl: optionalString,
+      imageUrl: optionalString,
+      // Without this key Zod strips it, isDraft reads as false and "Save Draft" broadcasts to everyone.
+      isDraft: z.preprocess(
+        (value) => (typeof value === "string" ? value.toLowerCase() === "true" : value),
+        z.boolean().optional()
+      ).optional(),
       scheduledFor: optionalDateString
     })
   }),

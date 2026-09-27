@@ -3074,9 +3074,10 @@ ownerRouter.post("/verify-phone/verify", async (req, res) => {
 
   phoneOtpStore.delete(key);
   try {
-    if (req.user.membershipId) {
-      await prisma.userSalon.update({ where: { id: req.user.membershipId }, data: { phone } });
-    }
+    await prisma.user.update({ where: { id: req.user.userId }, data: { isPhoneVerified: true } });
+      if (req.user.membershipId) {
+        await prisma.userSalon.update({ where: { id: req.user.membershipId }, data: { phone } });
+      }
   } catch {
     // non-fatal: verification already succeeded
   }
