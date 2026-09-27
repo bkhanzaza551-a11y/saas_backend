@@ -118,7 +118,7 @@ const smsloginSend = async ({ to, message, senderId }) => {
   const apiKey = process.env.SMSLOGIN_API_KEY || "a6c1394e8d00ba6fe1f6";
   const sender = senderId || process.env.SMSLOGIN_SENDER_ID || "SAONST";
   const username = process.env.SMSLOGIN_USERNAME || "SALONEST";
-  const templateId = process.env.SMSLOGIN_TEMPLATE_ID;
+  const templateId = process.env.SMSLOGIN_TEMPLATE_ID || "1277178729296112165";
 
   if (!apiKey || !username) {
     throw new Error("SMSLogin credentials missing: set SMSLOGIN_API_KEY and SMSLOGIN_USERNAME");

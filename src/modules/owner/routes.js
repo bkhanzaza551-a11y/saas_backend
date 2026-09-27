@@ -2961,10 +2961,23 @@ ownerRouter.post("/users/send-staff-otp", async (req, res) => {
   const key = `staff_otp:${salonId}:${phone}`;
   phoneOtpStore.set(key, { otpCode, expiresAt: Date.now() + PHONE_OTP_TTL_MS });
 
+  const messageText = `Your login verification code is ${otpCode}. It is valid for 20 minutes. Do not share this code with anyone. Salon Nest`;
+
+  let delivered = false;
   try {
-    const { sendWhatsApp } = await import("../../lib/whatsappService.js");
-    await sendWhatsApp({ salonId, to: phone, message: `Your Salon Nest verification code is ${otpCode}. It expires in 5 minutes.` }).catch(() => {});
-  } catch {}
+    const { sendSms } = await import("../../lib/smsService.js");
+    const smsResult = await sendSms({ salonId, to: phone, message: messageText });
+    if (smsResult.success) delivered = true;
+  } catch (err) {
+    console.error("[send-staff-otp] SMS send error:", err.message);
+  }
+
+  if (!delivered) {
+    try {
+      const { sendWhatsApp } = await import("../../lib/whatsappService.js");
+      await sendWhatsApp({ salonId, to: phone, message: messageText }).catch(() => {});
+    } catch {}
+  }
 
   res.json({ ok: true, message: "OTP sent successfully" });
 });
@@ -3029,14 +3042,14 @@ ownerRouter.post("/verify-phone/send", async (req, res) => {
       let delivered = false;
       try {
         const { sendSms } = await import("../../lib/smsService.js");
-        const smsResult = await sendSms({ salonId: req.user.salonId, to: phone, message: `Your Salon Nest verification code is ${otpCode}. It expires in 5 minutes.` });
+        const smsResult = await sendSms({ salonId: req.user.salonId, to: phone, message: `Your login verification code is ${otpCode}. It is valid for 20 minutes. Do not share this code with anyone. Salon Nest` });
         if (!smsResult.success) throw new Error("SMS Failed");
         delivered = true;
         channel = "sms";
       } catch {
         try {
           const { sendWhatsApp } = await import("../../lib/whatsappService.js");
-          const waResult = await sendWhatsApp({ salonId: req.user.salonId, to: phone, message: `Your Salon Nest verification code is ${otpCode}. It expires in 5 minutes.` });
+          const waResult = await sendWhatsApp({ salonId: req.user.salonId, to: phone, message: `Your login verification code is ${otpCode}. It is valid for 20 minutes. Do not share this code with anyone. Salon Nest` });
           if (!waResult.success) throw new Error("WA Failed");
           delivered = true;
           channel = "whatsapp";
