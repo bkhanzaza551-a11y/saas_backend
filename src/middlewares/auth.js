@@ -99,6 +99,7 @@ export const authMiddleware = async (req, res, next) => {
       permissions: mergedPermissions,
       featureFlags: mergedFeatureFlags,
       accessControlSettings,
+      pagePermissions: user.pagePermissions,
       plan: subscription?.plan
         ? {
             id: subscription.plan.id,

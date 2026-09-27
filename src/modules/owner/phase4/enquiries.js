@@ -26,7 +26,7 @@ export const registerEnquiryRoutes = (ownerRouter) => {
     };
     res.json(await prisma.enquiry.findMany({
       where,
-      include: { interestedService: true, interestedBranch: true, assignedToMembership: { include: { user: true } }, convertedCustomer: true, followUps: { orderBy: { createdAt: "desc" } } },
+      include: { interestedService: true, interestedBranch: true, assignedToMembership: { include: { user: true } }, convertedCustomer: true, followUps: { orderBy: { createdAt: "desc" }, include: { actorMembership: { include: { user: true } } } } },
       orderBy: { createdAt: "desc" }
     }));
   });
@@ -493,7 +493,18 @@ export const registerEnquiryRoutes = (ownerRouter) => {
   ownerRouter.get("/enquiries/:id", requireFeatureEnabled("enquiries"), requireSalonPermission("enquiries", "view"), async (req, res) => {
     const row = await prisma.enquiry.findFirst({
       where: { id: req.params.id, salonId: req.salonId },
-      include: { interestedService: true, interestedBranch: true, assignedToMembership: { include: { user: true } }, convertedCustomer: true, convertedAppointment: true, followUps: { orderBy: { createdAt: "desc" } } }
+      include: {
+        interestedService: true,
+        interestedBranch: true,
+        assignedToMembership: { include: { user: true } },
+        createdByMembership: { include: { user: true } },
+        convertedCustomer: true,
+        convertedAppointment: true,
+        followUps: {
+          orderBy: { createdAt: "desc" },
+          include: { actorMembership: { include: { user: true } } }
+        }
+      }
     });
     if (!row) return res.status(404).json({ message: "Enquiry not found" });
     res.json(row);
@@ -557,10 +568,18 @@ export const registerEnquiryRoutes = (ownerRouter) => {
         note: req.body.note,
         status: req.body.status || null,
         dueAt: toDate(req.body.dueAt)
-      }
+      },
+      include: { actorMembership: { include: { user: true } } }
     });
+    const updateData = {};
     if (req.body.dueAt) {
-      await prisma.enquiry.update({ where: { id: enquiry.id }, data: { followUpAt: new Date(req.body.dueAt) } });
+      updateData.followUpAt = new Date(req.body.dueAt);
+    }
+    if (req.body.status) {
+      updateData.status = req.body.status;
+    }
+    if (Object.keys(updateData).length > 0) {
+      await prisma.enquiry.update({ where: { id: enquiry.id }, data: updateData });
     }
     if (enquiry.email) {
       await attemptCustomerTemplateEmail({
