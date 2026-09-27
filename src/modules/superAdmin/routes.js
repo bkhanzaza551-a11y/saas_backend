@@ -1867,145 +1867,204 @@ superAdminRouter.delete("/branches/:id", asyncHandler(async (req, res) => {
 }));
 
 const AVAILABLE_PAGES = [
-  { key: "dashboard", label: "Dashboard", group: "Platform Command" },
-  { key: "salons", label: "Salons Control", group: "Platform Command" },
-  { key: "branches", label: "Branch Management", group: "Platform Command" },
-  { key: "plans", label: "Plans Catalog", group: "Platform Command" },
-  { key: "subscriptions", label: "Customer Management", group: "Platform Command" },
-  { key: "staff", label: "Staff Management", group: "Platform Command" },
-  { key: "demo-leads", label: "Demo Pipeline", group: "Operations" },
-  { key: "support-tickets", label: "Support Queue", group: "Operations" },
-  { key: "traffic", label: "Traffic Analytics", group: "Operations" },
-  { key: "staff-requirements", label: "Staff Requirements", group: "Operations" },
-  { key: "product-requirements", label: "Product Requirements", group: "Operations" },
-  { key: "settings", label: "Global Settings", group: "System" },
-  { key: "audit-logs", label: "Platform Logs", group: "System" }
+  { key: "dashboard", id: "dashboard", label: "Dashboard", name: "Dashboard", group: "Overview & CRM" },
+  { key: "sales-pipeline", id: "sales-pipeline", label: "Sales CRM / Pipeline", name: "Sales CRM", group: "Overview & CRM" },
+  { key: "salons", id: "salons", label: "Salon Management", name: "Salon Management", group: "Operations & Salons" },
+  { key: "product-requests", id: "product-requests", label: "Product Requests", name: "Product Requests", group: "Operations & Salons" },
+  { key: "staff-requests", id: "staff-requests", label: "Staff Requests", name: "Staff Requests", group: "Operations & Salons" },
+  { key: "subscriptions", id: "subscriptions", label: "Customer Subscriptions", name: "Customer Subscriptions", group: "Billing & Subscriptions" },
+  { key: "plans", id: "plans", label: "Plans Catalog", name: "Plans Catalog", group: "Billing & Subscriptions" },
+  { key: "finance", id: "finance", label: "Finance & Revenue", name: "Finance & Revenue", group: "Billing & Subscriptions" },
+  { key: "support-tickets", id: "support-tickets", label: "Support Queue", name: "Support Queue", group: "Support & Helpdesk" },
+  { key: "credits", id: "credits", label: "Credit Management", name: "Credit Management", group: "Administration & Governance" },
+  { key: "staff", id: "staff", label: "Team & Roles", name: "Team & Roles", group: "Administration & Governance" },
+  { key: "settings", id: "settings", label: "Platform Settings", name: "Platform Settings", group: "Administration & Governance" },
+  { key: "audit-logs", id: "audit-logs", label: "Audit Logs", name: "Audit Logs", group: "Administration & Governance" }
+];
+
+const DEFAULT_SUPER_ADMIN_ROLES = [
+  {
+    id: "super_admin",
+    name: "Super Admin",
+    description: "Full system administration and control",
+    permissions: {
+      dashboard: true,
+      "sales-pipeline": true,
+      salons: true,
+      "product-requests": true,
+      "staff-requests": true,
+      subscriptions: true,
+      plans: true,
+      finance: true,
+      "support-tickets": true,
+      credits: true,
+      staff: true,
+      settings: true,
+      "audit-logs": true
+    },
+    pagePermissions: ["*"]
+  },
+  {
+    id: "support_agent",
+    name: "Support Agent",
+    description: "Manage tickets, requests and salons",
+    permissions: {
+      dashboard: true,
+      "support-tickets": true,
+      "product-requests": true,
+      "staff-requests": true,
+      salons: true
+    },
+    pagePermissions: ["dashboard", "support-tickets", "product-requests", "staff-requests", "salons"]
+  },
+  {
+    id: "sales_rep",
+    name: "Sales Representative",
+    description: "Manage demo pipeline, salons and plans",
+    permissions: {
+      dashboard: true,
+      "sales-pipeline": true,
+      salons: true,
+      subscriptions: true,
+      plans: true
+    },
+    pagePermissions: ["dashboard", "sales-pipeline", "salons", "subscriptions", "plans"]
+  },
+  {
+    id: "finance_mgr",
+    name: "Finance Manager",
+    description: "Manage revenue, finance, subscriptions and pricing",
+    permissions: {
+      dashboard: true,
+      finance: true,
+      subscriptions: true,
+      plans: true
+    },
+    pagePermissions: ["dashboard", "finance", "subscriptions", "plans"]
+  },
+  {
+    id: "operations_mgr",
+    name: "Operations Manager",
+    description: "Manage salon operations, inventory and staffing requests",
+    permissions: {
+      dashboard: true,
+      salons: true,
+      subscriptions: true,
+      "product-requests": true,
+      "staff-requests": true
+    },
+    pagePermissions: ["dashboard", "salons", "subscriptions", "product-requests", "staff-requests"]
+  }
 ];
 
 superAdminRouter.get("/available-pages", asyncHandler(async (req, res) => {
   res.json(AVAILABLE_PAGES);
 }));
 
-superAdminRouter.get("/staff", asyncHandler(async (req, res) => {
-  const onlyActive = req.query.onlyActive === "1" || req.query.onlyActive === "true";
-  const role = req.query.role ? String(req.query.role) : "";
-  const where = { systemRole: "SUPER_ADMIN" };
-  if (onlyActive) where.isActive = true;
-  if (role) {
-    where.OR = [
-      { name: { contains: role, mode: "insensitive" } },
-      { email: { contains: role, mode: "insensitive" } }
-    ];
-  }
-  const users = await prisma.user.findMany({
-    where,
-    select: { id: true, name: true, email: true, isActive: true, createdAt: true, pagePermissions: true },
-    orderBy: { createdAt: "desc" }
-  });
-  res.json(users);
-}));
-
-superAdminRouter.post("/staff", asyncHandler(async (req, res) => {
-  const { name, email, password, pagePermissions } = req.body;
-  if (!name || !email || !password) return res.status(400).json({ message: "Name, email, and password are required." });
-
-  const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing) return res.status(409).json({ message: "A user with this email already exists." });
-
-  const user = await prisma.user.create({
-    data: {
-      name,
-      email,
-      passwordHash: await bcrypt.hash(password, 10),
-      systemRole: "SUPER_ADMIN",
-      pagePermissions: pagePermissions || []
-    },
-    select: { id: true, name: true, email: true, isActive: true, createdAt: true, pagePermissions: true }
-  });
-  res.status(201).json(user);
-}));
-
-superAdminRouter.patch("/staff/:id", asyncHandler(async (req, res) => {
-  const existing = await prisma.user.findUnique({ where: { id: req.params.id } });
-  if (!existing) return res.status(404).json({ message: "Staff not found" });
-
-  const data = {};
-  if (req.body.name !== undefined) data.name = req.body.name;
-  if (req.body.pagePermissions !== undefined) data.pagePermissions = req.body.pagePermissions;
-  if (req.body.isActive !== undefined) data.isActive = Boolean(req.body.isActive);
-  if (req.body.password && req.body.password.trim()) {
-    data.passwordHash = await bcrypt.hash(req.body.password, 10);
-  }
-
-  const updated = await prisma.user.update({
-    where: { id: req.params.id },
-    data,
-    select: { id: true, name: true, email: true, isActive: true, createdAt: true, pagePermissions: true }
-  });
-  res.json(updated);
-}));
-
-superAdminRouter.delete("/staff/:id", asyncHandler(async (req, res) => {
-  const existing = await prisma.user.findUnique({ where: { id: req.params.id } });
-  if (!existing) return res.status(404).json({ message: "Staff not found" });
-  if (existing.systemRole !== "SUPER_ADMIN") return res.status(400).json({ message: "Cannot delete non-super-admin users from here." });
-  await prisma.user.delete({ where: { id: req.params.id } });
-  res.json({ message: "Deleted" });
-}));
-
-// Team & Roles Aliases for Super Admin Staff Management
-const DEFAULT_SUPER_ADMIN_ROLES = [
-  { id: "super_admin", name: "Super Admin", description: "Full system administration and control", pagePermissions: ["*"] },
-  { id: "support_agent", name: "Support Agent", description: "Manage tickets, demo leads and salons", pagePermissions: ["salons", "tickets", "demo-leads"] },
-  { id: "sales_rep", name: "Sales Representative", description: "Manage demo pipeline and salons", pagePermissions: ["demo-leads", "salons"] }
-];
-
-const DEFAULT_SUPER_ADMIN_PAGES = [
-  { id: "dashboard", name: "Dashboard" },
-  { id: "salons", name: "Salons & Branches" },
-  { id: "demo-leads", name: "Demo Leads" },
-  { id: "subscriptions", name: "Subscriptions" },
-  { id: "plans", name: "Pricing Plans" },
-  { id: "tickets", name: "Support Tickets" },
-  { id: "staff", name: "Staff & Team" },
-  { id: "reports", name: "System Reports" },
-  { id: "settings", name: "Global Settings" }
-];
-
-
 superAdminRouter.get("/roles", asyncHandler(async (req, res) => {
   const gs = await prisma.globalSetting.findFirst();
-  const roles = gs?.notificationDefaults?.adminRoles || DEFAULT_SUPER_ADMIN_ROLES;
-  res.json(roles);
+  let roles = gs?.notificationDefaults?.adminRoles;
+  if (!roles || !Array.isArray(roles) || roles.length === 0) {
+    roles = DEFAULT_SUPER_ADMIN_ROLES;
+  }
+
+  // Ensure every role has proper permissions object
+  roles = roles.map(r => {
+    let perms = r.permissions;
+    if (!perms && Array.isArray(r.pagePermissions)) {
+      if (r.pagePermissions.includes("*")) {
+        perms = Object.fromEntries(AVAILABLE_PAGES.map(p => [p.key, true]));
+      } else {
+        perms = Object.fromEntries(r.pagePermissions.map(k => [k, true]));
+      }
+    }
+    return {
+      ...r,
+      permissions: perms || {}
+    };
+  });
+
+  const users = await prisma.user.findMany({
+    where: { systemRole: "SUPER_ADMIN" },
+    select: { pagePermissions: true }
+  });
+
+  const enriched = roles.map(r => {
+    const assignedUsersCount = users.filter(u => {
+      if (!u.pagePermissions || typeof u.pagePermissions !== "object") return false;
+      return u.pagePermissions.adminRoleId === r.id;
+    }).length;
+
+    return {
+      ...r,
+      _count: { users: assignedUsersCount },
+      userCount: assignedUsersCount
+    };
+  });
+
+  res.json(enriched);
 }));
 
 superAdminRouter.post("/roles", asyncHandler(async (req, res) => {
-  const payload = req.body;
+  const { name, description, permissions } = req.body || {};
+  if (!name || !name.trim()) return res.status(400).json({ message: "Role name is required" });
+
   const gs = await prisma.globalSetting.findFirst();
   const roles = gs?.notificationDefaults?.adminRoles || [...DEFAULT_SUPER_ADMIN_ROLES];
-  const newRole = { id: Math.random().toString(36).substring(7), ...payload };
+
+  const permKeys = permissions && typeof permissions === "object" && !Array.isArray(permissions)
+    ? Object.keys(permissions).filter(k => permissions[k] === true)
+    : Array.isArray(permissions) ? permissions : [];
+
+  const permObj = Object.fromEntries(permKeys.map(k => [k, true]));
+
+  const newRole = {
+    id: `role_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`,
+    name: name.trim(),
+    description: description?.trim() || "",
+    permissions: permObj,
+    pagePermissions: permKeys
+  };
+
   roles.push(newRole);
   const nd = gs?.notificationDefaults || {};
   nd.adminRoles = roles;
   await prisma.globalSetting.update({ where: { id: gs.id }, data: { notificationDefaults: nd } });
-  res.json(newRole);
+
+  res.status(201).json({ ...newRole, _count: { users: 0 } });
 }));
 
 superAdminRouter.patch("/roles/:id", asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const payload = req.body;
+  const { name, description, permissions } = req.body || {};
+
   const gs = await prisma.globalSetting.findFirst();
   const roles = gs?.notificationDefaults?.adminRoles || [...DEFAULT_SUPER_ADMIN_ROLES];
   const idx = roles.findIndex(r => r.id === id);
-  if (idx !== -1) {
-    roles[idx] = { ...roles[idx], ...payload };
-    const nd = gs?.notificationDefaults || {};
-    nd.adminRoles = roles;
-    await prisma.globalSetting.update({ where: { id: gs.id }, data: { notificationDefaults: nd } });
-    res.json(roles[idx]);
-  } else {
-    res.status(404).json({ message: "Role not found" });
-  }
+
+  if (idx === -1) return res.status(404).json({ message: "Role not found" });
+
+  const permKeys = permissions !== undefined
+    ? (permissions && typeof permissions === "object" && !Array.isArray(permissions)
+        ? Object.keys(permissions).filter(k => permissions[k] === true)
+        : Array.isArray(permissions) ? permissions : [])
+    : (roles[idx].permissions ? Object.keys(roles[idx].permissions).filter(k => roles[idx].permissions[k] === true) : []);
+
+  const permObj = Object.fromEntries(permKeys.map(k => [k, true]));
+
+  roles[idx] = {
+    ...roles[idx],
+    ...(name !== undefined ? { name: name.trim() } : {}),
+    ...(description !== undefined ? { description: description.trim() } : {}),
+    permissions: permObj,
+    pagePermissions: permKeys
+  };
+
+  const nd = gs?.notificationDefaults || {};
+  nd.adminRoles = roles;
+  await prisma.globalSetting.update({ where: { id: gs.id }, data: { notificationDefaults: nd } });
+
+  res.json(roles[idx]);
 }));
 
 superAdminRouter.delete("/roles/:id", asyncHandler(async (req, res) => {
@@ -2013,17 +2072,12 @@ superAdminRouter.delete("/roles/:id", asyncHandler(async (req, res) => {
   const gs = await prisma.globalSetting.findFirst();
   const roles = gs?.notificationDefaults?.adminRoles || [...DEFAULT_SUPER_ADMIN_ROLES];
   const filtered = roles.filter(r => r.id !== id);
+
   const nd = gs?.notificationDefaults || {};
   nd.adminRoles = filtered;
   await prisma.globalSetting.update({ where: { id: gs.id }, data: { notificationDefaults: nd } });
   res.json({ success: true });
 }));
-
-
-superAdminRouter.get("/available-pages", asyncHandler(async (req, res) => {
-  res.json(DEFAULT_SUPER_ADMIN_PAGES);
-}));
-
 
 superAdminRouter.get("/team", asyncHandler(async (req, res) => {
   const users = await prisma.user.findMany({
@@ -2031,26 +2085,31 @@ superAdminRouter.get("/team", asyncHandler(async (req, res) => {
     select: { id: true, name: true, email: true, isActive: true, createdAt: true, updatedAt: true, pagePermissions: true },
     orderBy: { createdAt: "desc" }
   });
-  
+
   const gs = await prisma.globalSetting.findFirst();
   const roles = gs?.notificationDefaults?.adminRoles || DEFAULT_SUPER_ADMIN_ROLES;
 
   const mapped = users.map(u => {
     let adminRoleId = null;
     let department = "General";
-    let permissions = [];
-    if (u.pagePermissions && !Array.isArray(u.pagePermissions)) {
-      adminRoleId = u.pagePermissions.adminRoleId;
+    let permissions = {};
+
+    if (u.pagePermissions && typeof u.pagePermissions === "object" && !Array.isArray(u.pagePermissions)) {
+      adminRoleId = u.pagePermissions.adminRoleId || null;
       department = u.pagePermissions.department || "General";
-      permissions = u.pagePermissions.permissions || [];
+      permissions = u.pagePermissions.permissions || {};
     } else if (Array.isArray(u.pagePermissions)) {
-      permissions = u.pagePermissions;
+      permissions = Object.fromEntries(u.pagePermissions.map(k => [k, true]));
     }
 
     const role = roles.find(r => r.id === adminRoleId) || null;
+    if (role && (!permissions || Object.keys(permissions).length === 0)) {
+      permissions = role.permissions || {};
+    }
 
     return {
       ...u,
+      adminRoleId,
       adminRole: role,
       department,
       pagePermissions: permissions
@@ -2060,37 +2119,85 @@ superAdminRouter.get("/team", asyncHandler(async (req, res) => {
   res.json({ users: mapped });
 }));
 
-
 superAdminRouter.post("/team/invite", asyncHandler(async (req, res) => {
-  const { name, email, adminRoleId, department } = req.body;
+  const { name, email, adminRoleId, department } = req.body || {};
   if (!name || !email) return res.status(400).json({ message: "Name and email are required." });
-  const existing = await prisma.user.findUnique({ where: { email } });
+  const cleanEmail = email.trim().toLowerCase();
+  const existing = await prisma.user.findUnique({ where: { email: cleanEmail } });
   if (existing) return res.status(409).json({ message: "A user with this email already exists." });
+
+  const gs = await prisma.globalSetting.findFirst();
+  const roles = gs?.notificationDefaults?.adminRoles || DEFAULT_SUPER_ADMIN_ROLES;
+  const role = roles.find(r => r.id === adminRoleId) || null;
 
   const tempPassword = `Admin@${Math.floor(1000 + Math.random() * 9000)}`;
   const user = await prisma.user.create({
     data: {
-      name,
-      email,
+      name: name.trim(),
+      email: cleanEmail,
       passwordHash: await bcrypt.hash(tempPassword, 10),
       systemRole: "SUPER_ADMIN",
-      passwordSetupRequired: true
+      passwordSetupRequired: true,
+      pagePermissions: {
+        adminRoleId: adminRoleId || null,
+        department: department || "General",
+        permissions: role?.permissions || {}
+      }
     },
-    select: { id: true, name: true, email: true, isActive: true, createdAt: true }
+    select: { id: true, name: true, email: true, isActive: true, createdAt: true, pagePermissions: true }
   });
-  res.status(201).json(user);
+
+  res.status(201).json({
+    ...user,
+    adminRoleId: adminRoleId || null,
+    adminRole: role || null,
+    department: department || "General"
+  });
 }));
 
-superAdminRouter.patch("/team/:id", asyncHandler(async (req, res) => {
-  const { name } = req.body;
-  const user = await prisma.user.update({
-    where: { id: req.params.id },
-    data: { ...(name ? { name } : {}) },
-    select: { id: true, name: true, email: true, isActive: true, createdAt: true }
-  });
-  res.json(user);
-}));
+  superAdminRouter.patch("/team/:id", asyncHandler(async (req, res) => {
+    const { name, adminRoleId, department } = req.body;
+    const existingUser = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!existingUser) return res.status(404).json({ message: "User not found" });
 
+    const data = {};
+    if (name) data.name = name;
+
+    let pagePermissions = existingUser.pagePermissions || {};
+    if (Array.isArray(pagePermissions)) {
+      pagePermissions = { permissions: pagePermissions };
+    }
+
+    let updatedPermissions = false;
+    
+    if (adminRoleId !== undefined) {
+      pagePermissions.adminRoleId = adminRoleId;
+      
+      const gs = await prisma.globalSetting.findFirst();
+      const roles = gs?.notificationDefaults?.adminRoles || [];
+      const role = roles.find(r => r.id === adminRoleId);
+      if (role) {
+        pagePermissions.permissions = role.permissions || [];
+      }
+      updatedPermissions = true;
+    }
+
+    if (department !== undefined) {
+      pagePermissions.department = department;
+      updatedPermissions = true;
+    }
+
+    if (updatedPermissions) {
+      data.pagePermissions = pagePermissions;
+    }
+
+    const user = await prisma.user.update({
+      where: { id: req.params.id },
+      data,
+      select: { id: true, name: true, email: true, isActive: true, createdAt: true, pagePermissions: true }
+    });
+    res.json(user);
+  }));
 superAdminRouter.patch("/team/:id/activate", asyncHandler(async (req, res) => {
   const user = await prisma.user.update({
     where: { id: req.params.id },

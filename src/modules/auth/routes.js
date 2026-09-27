@@ -59,6 +59,68 @@ authRouter.post("/register", validate(schemas.register), async (req, res) => {
   res.status(201).json({ id: user.id, email: user.email });
 });
 
+
+const resolveSuperAdminRole = async (user) => {
+  if (user.systemRole !== "SUPER_ADMIN") return null;
+
+  const gs = await prisma.globalSetting.findFirst();
+  const roles = gs?.notificationDefaults?.adminRoles || [
+    {
+      id: "super_admin",
+      name: "Super Admin",
+      description: "Full system administration and control",
+      permissions: {
+        dashboard: true,
+        "sales-pipeline": true,
+        salons: true,
+        "product-requests": true,
+        "staff-requests": true,
+        subscriptions: true,
+        plans: true,
+        finance: true,
+        "support-tickets": true,
+        credits: true,
+        staff: true,
+        settings: true,
+        "audit-logs": true
+      }
+    }
+  ];
+
+  let adminRoleId = null;
+  let department = "General";
+  let pagePermissions = {};
+
+  if (user.pagePermissions && typeof user.pagePermissions === "object" && !Array.isArray(user.pagePermissions)) {
+    adminRoleId = user.pagePermissions.adminRoleId || null;
+    department = user.pagePermissions.department || "General";
+    pagePermissions = user.pagePermissions.permissions || {};
+  } else if (Array.isArray(user.pagePermissions)) {
+    pagePermissions = Object.fromEntries(user.pagePermissions.map(k => [k, true]));
+  }
+
+  const role = roles.find(r => r.id === adminRoleId) || null;
+  if (role && Object.keys(pagePermissions).length === 0) {
+    pagePermissions = role.permissions || {};
+  }
+
+  if (!role && !adminRoleId) {
+    return {
+      adminRoleId: "super_admin",
+      adminRole: { id: "super_admin", name: "Super Admin", permissions: { "*": true } },
+      department: "Administration",
+      pagePermissions: { "*": true }
+    };
+  }
+
+  return {
+    adminRoleId,
+    adminRole: role,
+    department,
+    pagePermissions
+  };
+};
+
 const createAuthResponse = async (user) => {
   const activeMemberships = sortMemberships((user.memberships || []).filter(m => m?.salon?.status !== "SUSPENDED"));
   const membership = activeMemberships[0] || null;
@@ -110,7 +172,14 @@ const createAuthResponse = async (user) => {
     data: {
       accessToken,
       refreshToken,
-      user: { id: user.id, name: user.name, systemRole: user.systemRole, isPhoneVerified: user.isPhoneVerified },
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        systemRole: user.systemRole,
+        isPhoneVerified: user.isPhoneVerified,
+        ...(await resolveSuperAdminRole(user) || {})
+      },
       activeMemberships: activeMemberships,
       membership: membership
         ? {
@@ -427,7 +496,14 @@ authRouter.get("/me", async (req, res) => {
   });
 
   return res.json({
-    user: { id: user.id, name: user.name, email: user.email, systemRole: user.systemRole, isPhoneVerified: user.isPhoneVerified },
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      systemRole: user.systemRole,
+      isPhoneVerified: user.isPhoneVerified,
+      ...(await resolveSuperAdminRole(user) || {})
+    },
     membership: membership ? { ...serializeMembership(membership), permissions: mergedPermissions, featureFlags: mergedFeatureFlags } : null,
     activeMemberships: activeMemberships.map(serializeMembership)
   });
