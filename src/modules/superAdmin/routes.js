@@ -2133,7 +2133,7 @@ superAdminRouter.post("/demo-leads/:id/create-zoho-meeting", asyncHandler(async 
 }));
 
 superAdminRouter.post("/demo-leads/:id/contacted", asyncHandler(async (req, res) => { 
-  await prisma.demoLead.update({ where: { id: req.params.id }, data: { status: "CONTACTED" } }).catch(()=>null);
+  await prisma.demoLead.update({ where: { id: req.params.id }, data: { status: "CONNECTED" } }).catch(()=>null);
   res.json({ success: true }); 
 }));
 
@@ -2184,7 +2184,7 @@ superAdminRouter.post("/demo-leads/:id/follow-up-completed", asyncHandler(async 
 }));
 
 superAdminRouter.post("/demo-leads/:id/schedule-meeting", asyncHandler(async (req, res) => { 
-  await prisma.demoLead.update({ where: { id: req.params.id }, data: { status: "MEETING_SCHEDULED" } }).catch(()=>null);
+  await prisma.demoLead.update({ where: { id: req.params.id }, data: { status: "DEMO_SCHEDULED" } }).catch(()=>null);
   res.json({ success: true }); 
 }));
 
