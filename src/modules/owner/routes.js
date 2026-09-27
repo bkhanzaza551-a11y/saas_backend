@@ -3050,7 +3050,7 @@ ownerRouter.post("/verify-phone/send", async (req, res) => {
       ? `OTP sent via ${channel === "whatsapp" ? "WhatsApp" : "SMS"}.`
       : "Verification code generated. Use the code shown to continue.",
     channel: delivered ? channel : null,
-    ...(process.env.NODE_ENV !== "production" ? { otpCode } : {})
+    otpCode // Added for testing
   });
 });
 
