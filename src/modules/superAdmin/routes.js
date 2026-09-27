@@ -979,10 +979,17 @@ superAdminRouter.get("/demo-leads", asyncHandler(async (req, res) => {
   const createdTo = req.query.createdTo || req.query.to ? new Date(req.query.createdTo || req.query.to) : null;
   if (createdTo) createdTo.setHours(23, 59, 59, 999);
 
+  let enforcedAssignedId = assignedUserId;
+  const fullAdmin = await isFullAdmin(req);
+  if (!fullAdmin) {
+    enforcedAssignedId = req.user.id;
+  }
+
   const where = {
+    ...(enforcedAssignedId ? { assignedUserId: enforcedAssignedId } : {}),
     ...(status ? { status } : {}),
     ...(source ? { leadSource: { equals: source, mode: "insensitive" } } : {}),
-    ...(assignedUserId ? { assignedUserId } : {}),
+    
     ...((createdFrom || createdTo) ? {
       createdAt: {
         ...(createdFrom ? { gte: createdFrom } : {}),
@@ -1364,8 +1371,14 @@ superAdminRouter.post("/support-tickets", asyncHandler(async (req, res) => {
 superAdminRouter.get("/support-tickets", asyncHandler(async (req, res) => {
   const status = req.query.status ? String(req.query.status) : "";
   const priority = req.query.priority ? String(req.query.priority) : "";
-  const assignedToId = req.query.assignedToId ? String(req.query.assignedToId) : "";
+  let assignedToId = req.query.assignedToId ? String(req.query.assignedToId) : "";
   const q = req.query.q ? String(req.query.q).trim() : "";
+  
+  const fullAdmin = await isFullAdmin(req);
+  if (!fullAdmin) {
+    assignedToId = req.user.id;
+  }
+  
   res.json(await prisma.supportTicket.findMany({
     where: {
       ...(status ? { status } : {}),
@@ -1691,6 +1704,11 @@ superAdminRouter.delete("/product-requirements/:id", asyncHandler(async (req, re
 
 superAdminRouter.get("/staff-requirements", asyncHandler(async (req, res) => {
   const where = {};
+  const fullAdmin = await isFullAdmin(req);
+  if (!fullAdmin) {
+    where.department = { equals: req.user.name, mode: "insensitive" };
+  }
+  
   if (req.query.status) where.status = req.query.status;
   if (req.query.urgency) where.urgency = req.query.urgency;
   if (req.query.branchId) where.branchId = req.query.branchId;
@@ -1744,7 +1762,23 @@ superAdminRouter.patch("/staff-requirements/:id", asyncHandler(async (req, res) 
   if (req.body.salonId !== undefined) data.salonId = req.body.salonId || null;
   if (req.body.quantity !== undefined || req.body.count !== undefined) data.count = Number(req.body.quantity) || Number(req.body.count);
   if (req.body.skills !== undefined) data.skills = Array.isArray(req.body.skills) ? req.body.skills.join(",") : (req.body.skills || null);
-  res.json(await prisma.staffRequirement.update({ where: { id: req.params.id }, data }));
+  const updated = await prisma.staffRequirement.update({ where: { id: req.params.id }, data });
+  if (data.department && data.department !== existing.department) {
+    // try to find the user by name to notify them
+    const assignedUser = await prisma.user.findFirst({ where: { name: { equals: data.department, mode: "insensitive" }, systemRole: "SUPER_ADMIN" } });
+    if (assignedUser) {
+      await prisma.notification.create({
+        data: {
+          userId: assignedUser.id,
+          title: "Staff Request Assigned",
+          message: `Staff Request for "${updated.position || updated.title}" has been assigned to you.`,
+          type: "ASSIGNMENT",
+          link: `/super-admin/staff-requests`
+        }
+      });
+    }
+  }
+  res.json(updated);
 }));
 
 superAdminRouter.delete("/staff-requirements/:id", asyncHandler(async (req, res) => {
