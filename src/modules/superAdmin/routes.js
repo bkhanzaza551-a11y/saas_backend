@@ -1411,6 +1411,17 @@ superAdminRouter.patch("/support-tickets/:id", asyncHandler(async (req, res) => 
 
   const updated = await prisma.$transaction(async (tx) => {
     const row = await tx.supportTicket.update({ where: { id: req.params.id }, data: req.body });
+      if (req.body.assignedToId && req.body.assignedToId !== ticket.assignedToId) {
+        await tx.notification.create({
+          data: {
+            userId: req.body.assignedToId,
+            title: "Ticket Assigned",
+            message: `Support Ticket #${row.id.slice(-6)} "${row.title}" has been assigned to you.`,
+            type: "ASSIGNMENT",
+            link: `/super-admin/support`
+          }
+        });
+      }
     const eventMessages = [];
     if (req.body.status && req.body.status !== ticket.status) {
       eventMessages.push({
@@ -2077,6 +2088,61 @@ superAdminRouter.delete("/roles/:id", asyncHandler(async (req, res) => {
   nd.adminRoles = filtered;
   await prisma.globalSetting.update({ where: { id: gs.id }, data: { notificationDefaults: nd } });
   res.json({ success: true });
+}));
+
+
+superAdminRouter.get("/staff", asyncHandler(async (req, res) => {
+  const onlyActive = req.query.onlyActive === "1" || req.query.onlyActive === "true";
+  const roleFilter = req.query.role ? String(req.query.role).toLowerCase() : "";
+
+  const where = { systemRole: "SUPER_ADMIN" };
+  if (onlyActive) where.isActive = true;
+
+  const users = await prisma.user.findMany({
+    where,
+    select: { id: true, name: true, email: true, isActive: true, createdAt: true, updatedAt: true, pagePermissions: true },
+    orderBy: { createdAt: "desc" }
+  });
+
+  const gs = await prisma.globalSetting.findFirst();
+  const roles = gs?.notificationDefaults?.adminRoles || DEFAULT_SUPER_ADMIN_ROLES;
+
+  let mapped = users.map(u => {
+    let adminRoleId = null;
+    let department = "General";
+    let permissions = {};
+
+    if (u.pagePermissions && typeof u.pagePermissions === "object" && !Array.isArray(u.pagePermissions)) {
+      adminRoleId = u.pagePermissions.adminRoleId || null;
+      department = u.pagePermissions.department || "General";
+      permissions = u.pagePermissions.permissions || {};
+    } else if (Array.isArray(u.pagePermissions)) {
+      permissions = Object.fromEntries(u.pagePermissions.map(k => [k, true]));
+    }
+
+    const role = roles.find(r => r.id === adminRoleId) || null;
+    if (role && (!permissions || Object.keys(permissions).length === 0)) {
+      permissions = role.permissions || {};
+    }
+
+    return {
+      ...u,
+      adminRoleId,
+      adminRole: role,
+      department,
+      pagePermissions: permissions
+    };
+  });
+
+  if (roleFilter) {
+    mapped = mapped.filter(u => {
+      const rName = (u.adminRole?.name || "").toLowerCase();
+      const dept = (u.department || "").toLowerCase();
+      return rName.includes(roleFilter) || dept.includes(roleFilter);
+    });
+  }
+
+  res.json(mapped);
 }));
 
 superAdminRouter.get("/team", asyncHandler(async (req, res) => {
