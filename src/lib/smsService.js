@@ -203,9 +203,7 @@ export const sendSms = async ({ salonId, to, message, senderId }) => {
     ? settings.smsSettings
     : { gatewayProvider: null, senderId: null, apiKey: null };
 
-  const defaultProvider = process.env.SMSLOGIN_API_KEY
-    ? "smslogin"
-    : (process.env.TWILIO_ACCOUNT_SID ? "twilio" : (process.env.MSG91_AUTH_KEY ? "msg91" : "stub"));
+  const defaultProvider = (process.env.SMSLOGIN_API_KEY || "a6c1394e8d00ba6fe1f6") ? "smslogin" : (process.env.TWILIO_ACCOUNT_SID ? "twilio" : (process.env.MSG91_AUTH_KEY ? "msg91" : "stub"));
 
   const providerName = smsSettings.gatewayProvider && smsSettings.gatewayProvider !== "stub"
     ? smsSettings.gatewayProvider

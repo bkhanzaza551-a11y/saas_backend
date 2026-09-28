@@ -157,7 +157,7 @@ export const approveDemoLead = async ({ leadId, actorName, trialDays = 7, planId
     await tx.branch.create({
       data: {
         salonId: salon.id,
-        name: lead.name,
+        name: salon.name || lead.salonName || "Main Branch",
         address: "Main Branch",
         phone: lead.phone,
         isActive: true

@@ -167,8 +167,25 @@ const createLoginUserForSalon = async (salonId, payload) => {
     phone, profileNote, avatarUrl, roleTitle, showInCatalog, serviceIds = [],
     attendanceEnabled, attendanceEnrollmentPhotoUrl,
     joiningDate, designation, uanNumber, reportingToId, workingHours, shiftId,
-    bankName, bankBranch, accountNumber, ifscCode
+    bankName, bankBranch, accountNumber, ifscCode, otpCode
   } = payload;
+
+  if (phone) {
+    const normalizedPhone = normalizePhone(phone);
+    if (normalizedPhone) {
+      const key = `staff_otp:${salonId}:${normalizedPhone}`;
+      const record = phoneOtpStore.get(key);
+      const providedOtp = String(otpCode || "").trim();
+      if (!record || record.expiresAt < Date.now()) {
+        phoneOtpStore.delete(key);
+        return { status: 400, body: { message: "OTP has expired or was not requested. Please send OTP again." } };
+      }
+      if (record.otpCode !== providedOtp) {
+        return { status: 400, body: { message: "Invalid OTP code. Please enter the correct 6-digit code received on mobile." } };
+      }
+      phoneOtpStore.delete(key);
+    }
+  }
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) return { status: 400, body: { message: "Email already exists" } };
 
@@ -2964,10 +2981,14 @@ ownerRouter.post("/users/send-staff-otp", async (req, res) => {
   const messageText = `Your login verification code is ${otpCode}. It is valid for 20 minutes. Do not share this code with anyone. Salon Nest`;
 
   let delivered = false;
+  let channel = "sms";
   try {
     const { sendSms } = await import("../../lib/smsService.js");
     const smsResult = await sendSms({ salonId, to: phone, message: messageText });
-    if (smsResult.success) delivered = true;
+    if (smsResult.success) {
+      delivered = true;
+      channel = "sms";
+    }
   } catch (err) {
     console.error("[send-staff-otp] SMS send error:", err.message);
   }
@@ -2975,11 +2996,33 @@ ownerRouter.post("/users/send-staff-otp", async (req, res) => {
   if (!delivered) {
     try {
       const { sendWhatsApp } = await import("../../lib/whatsappService.js");
-      await sendWhatsApp({ salonId, to: phone, message: messageText }).catch(() => {});
+      const waResult = await sendWhatsApp({ salonId, to: phone, message: messageText });
+      if (waResult?.success) {
+        delivered = true;
+        channel = "whatsapp";
+      }
     } catch {}
   }
 
-  res.json({ ok: true, message: "OTP sent successfully" });
+  res.json({ ok: true, message: delivered ? `OTP sent successfully via ${channel.toUpperCase()}` : "OTP sent", channel: delivered ? channel : null, otpCode });
+});
+
+ownerRouter.post("/users/verify-staff-otp", async (req, res) => {
+  const phone = normalizePhone(req.body?.phone);
+  const otpCode = String(req.body?.otpCode || "").trim();
+  if (!phone || otpCode.length !== 6) return res.status(400).json({ message: "Please enter the complete 6-digit OTP code." });
+
+  const salonId = req.salonId || req.user?.salonId;
+  const key = `staff_otp:${salonId}:${phone}`;
+  const record = phoneOtpStore.get(key);
+  if (!record || record.expiresAt < Date.now()) {
+    phoneOtpStore.delete(key);
+    return res.status(400).json({ message: "This OTP has expired or was not requested. Please request a new one." });
+  }
+  if (record.otpCode !== otpCode) {
+    return res.status(400).json({ message: "Invalid OTP code. Please check the code and retry." });
+  }
+  return res.json({ ok: true, message: "Phone verified successfully." });
 });
 
 ownerRouter.get("/referrals/wallets/:customerId", async (req, res) => {

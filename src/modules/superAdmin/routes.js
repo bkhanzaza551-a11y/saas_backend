@@ -452,9 +452,9 @@ superAdminRouter.post("/salons", validate(schemas.salon), asyncHandler(async (re
       await tx.branch.create({
         data: {
           salonId: createdSalon.id,
-          name: ownerName,
+          name: createdSalon.name || "Main Branch",
           address: "Main Branch",
-          phone: ownerEmail,
+          phone: createdSalon.phone || ownerEmail || "",
           isActive: true
         }
       });
