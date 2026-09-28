@@ -1094,7 +1094,7 @@ export const createPosInvoice = async ({ salonId, actorUser, body }) => {
     }
     } // end !isStartMode
 
-    if (isStartMode) {
+    if (isStartMode && body.appointmentId) {
       await tx.appointment.update({
         where: { id: body.appointmentId },
         data: { convertedInvoiceId: invoice.id }
@@ -1459,7 +1459,8 @@ export const logPaymentLinkPlaceholder = async ({ salonId, invoiceId, status, no
 };
 
 export const getDayClosingSummary = async ({ salonId, branchId, date }) => {
-  const start = new Date(date || new Date());
+  const rawDate = date && date !== "undefined" && date !== "null" ? new Date(date) : new Date();
+  const start = isNaN(rawDate.getTime()) ? new Date() : rawDate;
   start.setHours(0, 0, 0, 0);
   const end = new Date(start);
   end.setDate(end.getDate() + 1);

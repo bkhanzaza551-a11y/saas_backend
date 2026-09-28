@@ -561,7 +561,7 @@ export const schemas = {
       branchId: idSchema,
       primaryStaffUserId: z.string().nullable().optional(),
       title: optionalString,
-      bookingChannel: z.enum(["WALK_IN", "PHONE", "ONLINE_PLACEHOLDER", "MANUAL"]).default("MANUAL"),
+      bookingChannel: z.enum(["WALK_IN", "PHONE", "ONLINE", "ONLINE_PLACEHOLDER", "MANUAL"]).default("MANUAL"),
       status: z.enum(["PENDING", "CONFIRMED", "CHECKED_IN", "IN_PROGRESS", "COMPLETED", "CANCELLED", "NO_SHOW"]).optional(),
       startAt: requiredDateString,
       endAt: requiredDateString,

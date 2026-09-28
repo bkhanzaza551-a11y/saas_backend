@@ -456,7 +456,7 @@ export const registerAppointmentRoutes = (ownerRouter) => {
         if (fullAppt && !fullAppt.convertedInvoiceId) {
           const existingInvoice = await prisma.invoice.findFirst({ where: { appointmentId: appointment.id, salonId: req.salonId, status: "STARTED" } });
           if (!existingInvoice) {
-            const { createInvoiceNumber } = await import("./shared.js");
+            const { createInvoiceNumber } = await import("../../../lib/pos.js");
             const invoiceNumber = await createInvoiceNumber(prisma, req.salonId, appointment.branchId);
             let subtotal = 0;
             let totalTax = 0;
@@ -557,7 +557,7 @@ export const registerAppointmentRoutes = (ownerRouter) => {
         for (const item of appointment.items) {
           await tx.appointmentService.update({
             where: { id: item.id },
-            data: { startAt: new Date(startAt), endAt: new Date(endAt) }
+            data: { startAt: startAt ? new Date(startAt) : (item.startAt || appointment.startAt), endAt: endAt ? new Date(endAt) : (item.endAt || appointment.endAt) }
           });
           
           await tx.appointmentServiceStaff.deleteMany({
@@ -717,7 +717,7 @@ export const registerAppointmentRoutes = (ownerRouter) => {
         const firstStaff = item.assignedStaff[0]?.userSalonId || null;
         return {
           serviceName: item.service.name,
-          staffName: item.assignedStaff.map((assignment) => assignment.userSalon.user.name).join(", "),
+          staffName: item.assignedStaff.map((assignment) => assignment.userSalon?.user?.name || "Staff").join(", "),
           qty: 1,
           unitPrice,
           taxPct,
@@ -786,12 +786,13 @@ export const registerAppointmentRoutes = (ownerRouter) => {
       return created;
     });
 
-    if (invoice?.customer?.email) {
+    const customerEmail = invoice?.customer?.email || appointment.customer?.email;
+    if (customerEmail) {
       const { isOn, emailEnabled } = await getNotificationToggles(req.salonId, invoice.branchId).catch(() => ({ isOn: () => true, emailEnabled: true }));
       if (isOn("advanceReceivedInvoice") && emailEnabled) {
         void attemptCustomerTemplateEmail({
           salonId: req.salonId,
-          toEmail: invoice.customer.email,
+          toEmail: customerEmail,
           templateType: "invoice_template",
           context: { invoiceId: invoice.id, customerId: invoice.customerId }
         }).catch(() => {});
@@ -803,7 +804,8 @@ export const registerAppointmentRoutes = (ownerRouter) => {
 
   ownerRouter.get("/appointment-settings", requireFeatureEnabled("appointments"), requireSalonPermission("appointments", "view"), async (req, res) => {
     const branchId = normalizeBranchId(req.query.branchId);
-    res.json(await getSalonSetting(prisma, req.salonId, branchId));
+    const setting = (await prisma.appointmentSetting.findFirst({ where: { salonId: req.salonId, branchId } })) || (await prisma.appointmentSetting.findFirst({ where: { salonId: req.salonId, branchId: null } }));
+    res.json(setting || { salonId: req.salonId, branchId, autoConfirm: true, advancePaymentRequired: false, onlineBookingEnabled: false });
   });
 
   ownerRouter.post("/appointment-settings", requireFeatureEnabled("appointments"), requireSalonPermission("appointments", "edit"), validate(schemas.appointmentSettings), async (req, res) => {
