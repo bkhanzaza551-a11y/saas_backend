@@ -128,21 +128,40 @@ export const registerMissingOwnerRoutes = (ownerRouter) => {
   // 5. Custom Domain Management
   ownerRouter.get("/domain/settings", async (req, res) => {
     try {
-      const catalog = await prisma.catalogSetting.findFirst({ where: { salonId: req.salonId } });
+      const [catalog, salon] = await Promise.all([
+        prisma.catalogSetting.findFirst({ where: { salonId: req.salonId } }),
+        prisma.salon.findUnique({ where: { id: req.salonId }, select: { slug: true } })
+      ]);
       const domain = catalog?.customSlug || "";
-      res.json({ customDomain: domain, status: domain ? "ACTIVE" : "NONE", cnameTarget: "domains.salonnest.in" });
+      const slug = salon?.slug || "";
+      const url = domain ? `https://${domain}.salonnest.in` : (slug ? `https://salonnest.in/site/${slug}` : "");
+      res.json({
+        subdomain: domain,
+        customDomain: domain,
+        status: domain ? "ACTIVE" : "NONE",
+        url,
+        salon: { slug },
+        cnameTarget: "domains.salonnest.in"
+      });
     } catch {
-      res.json({ customDomain: "", status: "NONE", cnameTarget: "domains.salonnest.in" });
+      res.json({ subdomain: "", customDomain: "", status: "NONE", url: "", salon: { slug: "" }, cnameTarget: "domains.salonnest.in" });
     }
   });
 
   ownerRouter.get("/domain/check", async (req, res) => {
-    res.json({ verified: true, message: "Domain DNS is correctly configured" });
+    try {
+      const name = req.query.name;
+      const existing = await prisma.catalogSetting.findFirst({ where: { customSlug: String(name || "") } });
+      const available = !existing || existing.salonId === req.salonId;
+      res.json({ available, verified: true, message: available ? "Domain is available" : "Domain is already taken" });
+    } catch {
+      res.json({ available: true, verified: true, message: "Domain is available" });
+    }
   });
 
   ownerRouter.post("/domain/set", async (req, res) => {
     try {
-      const { domain } = req.body;
+      const domain = req.body.subdomain || req.body.domain;
       const catalog = await prisma.catalogSetting.findFirst({ where: { salonId: req.salonId } });
       if (catalog) {
         await prisma.catalogSetting.update({
@@ -154,7 +173,8 @@ export const registerMissingOwnerRoutes = (ownerRouter) => {
           data: { salonId: req.salonId, customSlug: domain }
         });
       }
-      res.json({ success: true, message: "Domain updated successfully" });
+      const url = domain ? `https://${domain}.salonnest.in` : "";
+      res.json({ success: true, subdomain: domain, status: "ACTIVE", url, message: "Domain updated successfully" });
     } catch {
       res.status(500).json({ message: "Failed to save domain" });
     }
