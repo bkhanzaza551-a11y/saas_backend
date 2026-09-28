@@ -73,7 +73,7 @@ const isReminderAutomationEnabled = (settings) =>
   settings.notificationSettings.toggles?.appointmentReminderBeforeDays !== false &&
   settings.notificationSettings.toggles?.appointmentReminderBeforeHours !== false &&
   settings.notificationSettings.toggles?.messageForAppointments !== false &&
-  settings.notificationSettings.toggles?.smsForServiceReminder !== false;
+  true;
 
 const getReminderWindowMs = (settings) => {
   const days = Math.max(0, toNumber(settings.genericSettings.appointmentReminderDays, 1));

@@ -45,9 +45,10 @@ export const logAppointmentChange = async (tx, appointmentId, actorUserId, actio
   });
 
 export const nextNumber = async (tx, model, salonId, prefix) => {
+  const orderField = model === "purchaseOrder" ? { orderedAt: "desc" } : { createdAt: "desc" };
   const latest = await tx[model].findFirst({
     where: { salonId },
-    orderBy: { createdAt: "desc" }
+    orderBy: orderField
   });
   const lastNum = latest?.invoiceNumber || latest?.appointmentNumber || latest?.poNumber || latest?.orderNumber;
   const lastSeq = lastNum ? parseInt(String(lastNum).split("-").pop(), 10) || 0 : 0;

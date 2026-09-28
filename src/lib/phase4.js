@@ -108,11 +108,13 @@ export const getCustomerValidLoyaltyBalance = async (customerId) => {
   for (const tx of transactions) {
     // Skip points that have already expired
     if (tx.expiresAt && new Date(tx.expiresAt) < now) continue;
-    const points = Number(tx.points || 0);
-    if (tx.type === "EARN") {
-      balance += points;
-    } else if (tx.type === "REDEEM" || tx.type === "ADJUST" || tx.type === "EXPIRE") {
-      balance -= points;
+    const pts = Math.abs(Number(tx.points || 0));
+    if (tx.type === "EARN" || tx.type === "BONUS") {
+      balance += pts;
+    } else if (tx.type === "REDEEM" || tx.type === "EXPIRE") {
+      balance -= pts;
+    } else if (tx.type === "ADJUST") {
+      balance += Number(tx.points || 0);
     }
   }
   // Never let the live recomputation go below zero (defensive)

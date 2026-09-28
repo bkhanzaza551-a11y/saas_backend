@@ -672,8 +672,8 @@ export const registerBillingRoutes = (ownerRouter) => {
                   salonId: req.salonId,
                   branchId: existingInvoice.branchId,
                   productId: existingItem.productId,
-                  quantity: newQty - oldQty,
-                  movementType: "SOLD",
+                  quantity: -(newQty - oldQty),
+                  movementType: "POS_SALE",
                   createdByUserId: req.user.id,
                   referenceType: "INVOICE_EDIT",
                   referenceId: existingInvoice.id

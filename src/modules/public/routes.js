@@ -623,7 +623,7 @@ publicRouter.get("/domain/resolve", asyncHandler(async (req, res) => {
     where: {
       OR: [
         { slug: host },
-        { websiteConfig: { path: ["customDomain"], equals: host } }
+        { featureFlags: { path: ["websiteConfig", "customDomain"], equals: host } }
       ]
     },
     select: { id: true, name: true, slug: true, logoUrl: true }
@@ -680,40 +680,40 @@ const handleCreateBooking = asyncHandler(async (req, res) => {
   const salon = await findPublicSalon(req.params.slug);
   if (!salon) return res.status(404).json({ message: "Salon not found" });
 
-  const { customerName, customerPhone, customerEmail, scheduledAt, startAt, serviceId, notes, paymentMode } = req.body;
+  const { customerName, customerPhone, customerEmail, scheduledAt, startAt, serviceId, notes, paymentMode, branchId: reqBranchId } = req.body;
   
+  const defaultBranch = await prisma.branch.findFirst({
+    where: { salonId: salon.id, isActive: true },
+    orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }]
+  });
+  const branchId = reqBranchId || defaultBranch?.id;
+  if (!branchId) return res.status(400).json({ message: "No active branch found for booking" });
+
   // Find or create customer
-  let customer = null;
-  if (customerPhone) {
-    customer = await prisma.customer.findFirst({
-      where: { salonId: salon.id, phone: customerPhone }
+  const phone = customerPhone || "9999999999";
+  let customer = await prisma.customer.findFirst({
+    where: { salonId: salon.id, phone }
+  });
+  if (!customer) {
+    customer = await prisma.customer.create({
+      data: {
+        salonId: salon.id,
+        name: customerName || "Online Guest",
+        phone,
+        email: customerEmail || null
+      }
     });
-    if (!customer) {
-      customer = await prisma.customer.create({
-        data: {
-          salonId: salon.id,
-          name: customerName || "Online Guest",
-          phone: customerPhone,
-          email: customerEmail || null
-        }
-      });
-    }
   }
 
   const bookingStart = startAt || scheduledAt ? new Date(startAt || scheduledAt) : new Date();
   const bookingEnd = new Date(bookingStart.getTime() + 60 * 60 * 1000);
   const orderNum = "BK-" + Date.now().toString().slice(-6);
 
-  let svcPrice = 0;
-  if (serviceId) {
-    const s = await prisma.service.findUnique({ where: { id: serviceId } });
-    if (s) svcPrice = Number(s.price || 0);
-  }
-
   const appt = await prisma.appointment.create({
     data: {
       salonId: salon.id,
-      customerId: customer?.id || null,
+      branchId,
+      customerId: customer.id,
       startAt: bookingStart,
       endAt: bookingEnd,
       status: "CONFIRMED",
@@ -721,7 +721,6 @@ const handleCreateBooking = asyncHandler(async (req, res) => {
       items: serviceId ? {
         create: [{
           serviceId,
-          price: svcPrice,
           startAt: bookingStart,
           endAt: bookingEnd
         }]
