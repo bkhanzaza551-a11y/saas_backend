@@ -5,6 +5,7 @@ import { signAccessToken, signRefreshToken, verifyLoginAccessToken, verifyRefres
 import { validate, schemas } from "../../middlewares/validate.js";
 import { hashPasswordSetupToken, generateRawPasswordSetupToken } from "../../lib/passwordSetup.js";
 import { sendMail } from "../../lib/mailer.js";
+import { sendSms } from "../../lib/smsService.js";
 import { defaultOwnerPermissions } from "../../lib/permissions.js";
 import { runExpiredDemoCleanup } from "../../lib/trialCleanup.js";
 
@@ -260,6 +261,17 @@ authRouter.post("/login", validate(schemas.login), async (req, res) => {
     text: `Your OTP for login is ${otp}. It is valid for 10 minutes.`,
     html: `<p>Your OTP for login is <strong>${otp}</strong>.</p><p>It is valid for 10 minutes.</p>`
   }).catch(e => console.error("OTP Email failed", e));
+
+  // Also send OTP to SMS if phone is available
+  const targetPhone = user.memberships?.find(m => m.phone)?.phone || null;
+  const targetSalonId = user.memberships?.[0]?.salonId || null;
+  if (targetPhone) {
+    sendSms({
+      salonId: targetSalonId,
+      to: targetPhone,
+      message: `Your login OTP for SalonNest is ${otp}. Valid for 10 minutes.`
+    }).catch(e => console.error("OTP SMS failed", e));
+  }
 
   // Return requiring OTP + include OTP for testing
   return res.json({
