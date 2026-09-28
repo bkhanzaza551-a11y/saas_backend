@@ -185,7 +185,7 @@ export const registerMissingReportRoutes = (ownerRouter) => {
           ...(customerId ? { customerId } : {})
         }
       },
-      include: { customerMembership: { include: { customer: true, membershipPlan: true } }, service: true },
+      include: { customerMembership: { include: { customer: true, membershipPlan: true } } },
       orderBy: { createdAt: "desc" },
       take: 500
     });
@@ -193,7 +193,7 @@ export const registerMissingReportRoutes = (ownerRouter) => {
       "Date": u.createdAt,
       "Customer": u.customerMembership?.customer?.name || "-",
       "Membership": u.customerMembership?.membershipPlan?.name || "-",
-      "Service Redeemed": u.service?.name || "-",
+      "Service Redeemed": u.note || u.serviceId || "-",
       "Amount Used": u.amountUsed || 0
     })));
     } catch (err) { console.error("membership-redemption report error:", err); res.json([]); }
@@ -210,8 +210,7 @@ export const registerMissingReportRoutes = (ownerRouter) => {
             customer: true,
             membershipPlan: true
           }
-        },
-        service: true
+        }
       },
       orderBy: { createdAt: "desc" },
       take: 500
@@ -221,7 +220,7 @@ export const registerMissingReportRoutes = (ownerRouter) => {
       "Customer": u.customerMembership?.customer?.name || "-",
       "Home Branch": "-",
       "Redeemed Branch": "-",
-      "Service": u.service?.name || "-",
+      "Service": u.note || u.serviceId || "-",
       "Value Transfer": u.amountUsed || 0
     }));
     res.json(appendTotalRow(mapped, "Customer", "TOTAL", ["Value Transfer"]));
@@ -241,7 +240,7 @@ export const registerMissingReportRoutes = (ownerRouter) => {
           ...(customerId ? { customerId } : {})
         }
       },
-      include: { customerPackage: { include: { customer: true, package: true } }, service: true },
+      include: { customerPackage: { include: { customer: true, package: true } } },
       orderBy: { createdAt: "desc" },
       take: 500
     });
@@ -249,8 +248,8 @@ export const registerMissingReportRoutes = (ownerRouter) => {
       "Date": u.createdAt,
       "Customer": u.customerPackage?.customer?.name || "-",
       "Package": u.customerPackage?.package?.name || "-",
-      "Service Redeemed": u.service?.name || "-",
-      "Amount Used": u.amountUsed || 0
+      "Service Redeemed": u.note || u.serviceId || "-",
+      "Amount Used": u.sessionsUsed || 0
     })));
     } catch (err) { console.error("package-redemption report error:", err); res.json([]); }
   });
@@ -260,14 +259,14 @@ export const registerMissingReportRoutes = (ownerRouter) => {
     const { startDate, endDate } = buildDateRange(req);
     const cards = await prisma.giftCard.findMany({
       where: { salonId: req.salonId, createdAt: { gte: startDate, lte: endDate } },
-      include: { customer: true, branch: true },
+      include: { issuedToCustomer: true, branch: true },
       orderBy: { createdAt: "desc" },
       take: 500
     });
     const mapped = cards.map((c, idx) => ({
       "Date": c.createdAt,
       "Code": c.code,
-      "Customer": c.customer?.name || "-",
+      "Customer": c.issuedToCustomer?.name || "-",
       "Value": c.originalAmount,
       "Expiry": c.expiresAt ? c.expiresAt.toISOString().slice(0,10) : "-",
       "Branch": c.branch?.name || "-"
@@ -380,12 +379,12 @@ export const registerMissingReportRoutes = (ownerRouter) => {
     const { startDate, endDate } = buildDateRange(req);
     const invoices = await prisma.invoice.findMany({
       where: { ...buildInvoiceWhere(req, normalizeBranchId(req.query.branchId)), status: "PAID", total: 0, createdAt: { gte: startDate, lte: endDate } },
-      include: { customer: true, branch: true, items: { include: { service: true } } },
+      include: { customer: true, branch: true, items: true },
       orderBy: { createdAt: "desc" },
       take: 500
     });
     const mapped = invoices.map((inv, idx) => {
-      const firstService = inv.items.find(i => i.service)?.service?.name || "-";
+      const firstService = inv.items.find(i => i.serviceName)?.serviceName || "-";
       return {
         "Date": inv.createdAt,
         "Service": firstService,
@@ -450,7 +449,7 @@ export const registerMissingReportRoutes = (ownerRouter) => {
   ownerRouter.get("/reports/guest-followups", requireFeatureEnabled("customers"), requireSalonPermission("customers", "view"), async (req, res) => {
     const customers = await prisma.customer.findMany({
       where: { salonId: req.salonId, lastVisitAt: { not: null } },
-      include: { timeline: { where: { eventType: "FOLLOW_UP" }, orderBy: { createdAt: "desc" }, take: 1 } },
+      include: { timelineEntries: { where: { eventType: "FOLLOW_UP" }, orderBy: { createdAt: "desc" }, take: 1 } },
       orderBy: { lastVisitAt: "asc" },
       take: 200
     });
@@ -458,7 +457,7 @@ export const registerMissingReportRoutes = (ownerRouter) => {
     res.json(customers.map((c) => {
       const lastVisit = c.lastVisitAt ? new Date(c.lastVisitAt) : null;
       const daysSince = lastVisit ? Math.floor((today - lastVisit) / 86400000) : 0;
-      const followUpStatus = c.timeline?.[0]?.status || "PENDING";
+      const followUpStatus = c.timelineEntries?.[0]?.title || "PENDING";
       return {
         "Customer": c.name,
         "Phone": c.phone,
@@ -664,15 +663,14 @@ export const registerMissingReportRoutes = (ownerRouter) => {
   // ============ Inventory Transaction Report ============
   ownerRouter.get("/reports/inventory-transaction", requireFeatureEnabled("inventory"), requireSalonPermission("inventory", "view"), async (req, res) => {
     const { startDate, endDate } = buildDateRange(req);
-    const { productId, stylistId } = buildReportFilters(req);
+    const { productId } = buildReportFilters(req);
     const movements = await prisma.stockMovement.findMany({
       where: {
         salonId: req.salonId,
         createdAt: { gte: startDate, lte: endDate },
-        ...(productId ? { productId } : {}),
-        ...(stylistId ? { userSalonId: stylistId } : {})
+        ...(productId ? { productId } : {})
       },
-      include: { product: true, branch: true, userSalon: { include: { user: true } } },
+      include: { product: true },
       orderBy: { createdAt: "desc" },
       take: 500
     });
@@ -682,8 +680,8 @@ export const registerMissingReportRoutes = (ownerRouter) => {
       "Type": m.movementType,
       "Qty": m.quantity,
       "Reference": m.referenceType ? `${m.referenceType}${m.referenceId ? ` #${m.referenceId.slice(-6)}` : ""}` : "-",
-      "Branch": m.branch?.name || "-",
-      "Staff": m.userSalon?.user?.name || "-"
+      "Branch": m.branchId || "-",
+      "Staff": m.createdByUserId || "-"
     })));
   });
 

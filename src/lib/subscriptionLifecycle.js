@@ -199,6 +199,12 @@ export const convertDemoToPaid = async ({ subscriptionId, actorName, planId, end
     });
   });
 
+  const ownerMembership = await prisma.userSalon.findFirst({
+    where: { salonId: existing.salonId, salonRole: "SALON_OWNER", isArchived: false },
+    include: { user: true }
+  });
+  const owner = ownerMembership?.user || { id: "", email: "", name: existing.salon?.name || "Salon Owner" };
+
   const loginAccessToken = signLoginAccessToken({
     userId: owner.id,
     email: owner.email,

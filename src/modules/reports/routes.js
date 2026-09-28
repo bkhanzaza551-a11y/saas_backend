@@ -1262,7 +1262,7 @@ reportsRouter.get("/service-reminder", async (req, res) => {
     include: {
       invoices: {
         where: { salonId, createdAt: { gte: sinceDate, lte: untilDate } },
-        include: { items: { include: { service: true } } },
+        include: { items: true },
         orderBy: { createdAt: "desc" },
         take: 1
       }

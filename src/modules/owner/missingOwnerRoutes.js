@@ -128,14 +128,11 @@ export const registerMissingOwnerRoutes = (ownerRouter) => {
   // 5. Custom Domain Management
   ownerRouter.get("/domain/settings", async (req, res) => {
     try {
-      const salon = await prisma.salon.findUnique({
-        where: { id: req.salonId },
-        select: { id: true, name: true, slug: true, websiteConfig: true }
-      });
-      const domain = salon?.websiteConfig?.customDomain || "";
-      res.json({ customDomain: domain, status: domain ? "ACTIVE" : "NONE", cnameTarget: "domains.salonest.in" });
-    } catch (e) {
-      res.json({ customDomain: "", status: "NONE", cnameTarget: "domains.salonest.in" });
+      const catalog = await prisma.catalogSetting.findFirst({ where: { salonId: req.salonId } });
+      const domain = catalog?.customSlug || "";
+      res.json({ customDomain: domain, status: domain ? "ACTIVE" : "NONE", cnameTarget: "domains.salonnest.in" });
+    } catch {
+      res.json({ customDomain: "", status: "NONE", cnameTarget: "domains.salonnest.in" });
     }
   });
 
@@ -146,29 +143,34 @@ export const registerMissingOwnerRoutes = (ownerRouter) => {
   ownerRouter.post("/domain/set", async (req, res) => {
     try {
       const { domain } = req.body;
-      const salon = await prisma.salon.findUnique({ where: { id: req.salonId } });
-      const currentConfig = salon?.websiteConfig || {};
-      await prisma.salon.update({
-        where: { id: req.salonId },
-        data: { websiteConfig: { ...currentConfig, customDomain: domain } }
-      });
+      const catalog = await prisma.catalogSetting.findFirst({ where: { salonId: req.salonId } });
+      if (catalog) {
+        await prisma.catalogSetting.update({
+          where: { id: catalog.id },
+          data: { customSlug: domain }
+        });
+      } else {
+        await prisma.catalogSetting.create({
+          data: { salonId: req.salonId, customSlug: domain }
+        });
+      }
       res.json({ success: true, message: "Domain updated successfully" });
-    } catch (e) {
+    } catch {
       res.status(500).json({ message: "Failed to save domain" });
     }
   });
 
   ownerRouter.delete("/domain/remove", async (req, res) => {
     try {
-      const salon = await prisma.salon.findUnique({ where: { id: req.salonId } });
-      const currentConfig = salon?.websiteConfig || {};
-      delete currentConfig.customDomain;
-      await prisma.salon.update({
-        where: { id: req.salonId },
-        data: { websiteConfig: currentConfig }
-      });
+      const catalog = await prisma.catalogSetting.findFirst({ where: { salonId: req.salonId } });
+      if (catalog) {
+        await prisma.catalogSetting.update({
+          where: { id: catalog.id },
+          data: { customSlug: null }
+        });
+      }
       res.json({ success: true, message: "Custom domain removed" });
-    } catch (e) {
+    } catch {
       res.status(500).json({ message: "Failed to remove domain" });
     }
   });
@@ -242,13 +244,13 @@ export const registerMissingOwnerRoutes = (ownerRouter) => {
   // 7. Staff Schedule & Availability Grid
   ownerRouter.get("/staff-availability", async (req, res) => {
     try {
-      const staff = await prisma.user.findMany({
-        where: { memberships: { some: { salonId: req.salonId } } },
-        select: { id: true, name: true, phone: true }
+      const staffSalons = await prisma.userSalon.findMany({
+        where: { salonId: req.salonId, isArchived: false },
+        include: { user: true }
       });
-      res.json(staff.map(s => ({
-        staffId: s.id,
-        name: s.name,
+      res.json(staffSalons.map(s => ({
+        staffId: s.userId || s.id,
+        name: s.user?.name || "Staff Member",
         days: {
           monday: { isWorking: true, shift: "10:00 AM - 08:00 PM" },
           tuesday: { isWorking: true, shift: "10:00 AM - 08:00 PM" },
@@ -323,10 +325,12 @@ export const registerMissingOwnerRoutes = (ownerRouter) => {
       const coupon = await prisma.coupon.create({
         data: {
           salonId: req.salonId,
+          title: req.body.title || req.body.code || "Referral Coupon",
           code: req.body.code || `REF-${Date.now().toString().slice(-4)}`,
           discountType: req.body.discountType || "PERCENT",
           discountValue: Number(req.body.discountValue || 10),
-          isActive: true
+          isArchived: false,
+          isReferral: true
         }
       });
       res.status(201).json(coupon);

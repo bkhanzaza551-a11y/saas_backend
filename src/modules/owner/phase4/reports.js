@@ -297,12 +297,12 @@ export const registerAdvancedReportRoutes = (ownerRouter) => {
     ownerRouter.get("/reports/payment-modes", async (req, res) => {
       try {
         const bs = branchScope(req);
-        const payments = await prisma.invoicePayment.findMany({
-          where: { invoice: { salonId: req.salonId, ...bs, status: { not: "CANCELLED" } }, ...parseDateWhere(req.query) }
+        const payments = await prisma.payment.findMany({
+          where: { salonId: req.salonId, ...(bs.branchId ? { branchId: bs.branchId } : {}), ...parseDateWhere(req.query) }
         });
         const modes = {};
         payments.forEach(p => {
-          const m = p.method || "CASH";
+          const m = p.mode || "CASH";
           modes[m] = (modes[m] || 0) + toNumber(p.amount);
         });
         res.json(modes);
@@ -315,10 +315,10 @@ export const registerAdvancedReportRoutes = (ownerRouter) => {
       try {
         const bs = branchScope(req);
         const appts = await prisma.appointment.findMany({
-          where: { salonId: req.salonId, ...bs, ...parseDateWhere(req.query, "scheduledAt") },
-          include: { customer: true, staff: true },
+          where: { salonId: req.salonId, ...bs, ...parseDateWhere(req.query, "startAt") },
+          include: { customer: true, primaryStaff: { include: { user: true } } },
           take: 100,
-          orderBy: { scheduledAt: "desc" }
+          orderBy: { startAt: "desc" }
         });
         res.json(appts);
       } catch (e) {
@@ -329,11 +329,11 @@ export const registerAdvancedReportRoutes = (ownerRouter) => {
     ownerRouter.get("/reports/staff-performance", async (req, res) => {
       try {
         const bs = branchScope(req);
-        const staff = await prisma.user.findMany({
-          where: { memberships: { some: { salonId: req.salonId, ...bs } } },
-          select: { id: true, name: true }
+        const staff = await prisma.userSalon.findMany({
+          where: { salonId: req.salonId, isArchived: false, ...(bs.branchId ? { branchId: bs.branchId } : {}) },
+          include: { user: true }
         });
-        res.json(staff.map(s => ({ staffId: s.id, staffName: s.name, totalSales: 0, serviceCount: 0 })));
+        res.json(staff.map(s => ({ staffId: s.userId || s.id, staffName: s.user?.name || "Staff Member", totalSales: 0, serviceCount: 0 })));
       } catch (e) {
         res.json([]);
       }
@@ -395,7 +395,7 @@ export const registerAdvancedReportRoutes = (ownerRouter) => {
         const stock = await prisma.product.findMany({
           where: { salonId: req.salonId, ...bs },
           take: 100,
-          orderBy: { stockQuantity: "asc" }
+          orderBy: { currentStock: "asc" }
         });
         res.json(stock);
       } catch (e) {
@@ -446,9 +446,9 @@ export const registerAdvancedReportRoutes = (ownerRouter) => {
       try {
         const bs = branchScope(req);
         const lowStock = await prisma.product.findMany({
-          where: { salonId: req.salonId, ...bs, stockQuantity: { lte: 5 } },
+          where: { salonId: req.salonId, ...bs, currentStock: { lte: 5 } },
           take: 50,
-          orderBy: { stockQuantity: "asc" }
+          orderBy: { currentStock: "asc" }
         });
         res.json(lowStock);
       } catch (e) {

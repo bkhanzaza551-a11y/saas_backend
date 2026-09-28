@@ -199,7 +199,7 @@ publicRouter.get("/salon/:slug/product/:productId", asyncHandler(async (req, res
 }));
 
 // Public order tracking — customer can track order by order number + phone/email
-publicRouter.get("/salon/:slug/track-order", asyncHandler(async (req, res) => {
+const handleTrackOrder = asyncHandler(async (req, res) => {
   let salon = await prisma.salon.findUnique({ where: { slug: req.params.slug }, select: { id: true } });
   if (!salon) {
     const custom = await prisma.catalogSetting.findFirst({ where: { customSlug: req.params.slug }, select: { salonId: true } });
@@ -240,7 +240,9 @@ publicRouter.get("/salon/:slug/track-order", asyncHandler(async (req, res) => {
       createdAt: l.createdAt
     }))
   });
-}));
+});
+publicRouter.get("/salon/:slug/track-order", handleTrackOrder);
+publicRouter.get("/salons/:slug/track-order", handleTrackOrder);
 
 // Public enquiry submission
 publicRouter.post("/salon/:slug/enquiry", asyncHandler(async (req, res) => {
@@ -663,10 +665,10 @@ const handleBookedSlots = asyncHandler(async (req, res) => {
   const appts = await prisma.appointment.findMany({
     where: {
       salonId: salon.id,
-      scheduledAt: { gte: start, lte: end },
+      startAt: { gte: start, lte: end },
       status: { notIn: ["CANCELLED", "NO_SHOW"] }
     },
-    select: { id: true, scheduledAt: true, durationMinutes: true, staffId: true }
+    select: { id: true, startAt: true, endAt: true, primaryStaffUserId: true }
   });
   res.json(appts);
 });
@@ -678,7 +680,7 @@ const handleCreateBooking = asyncHandler(async (req, res) => {
   const salon = await findPublicSalon(req.params.slug);
   if (!salon) return res.status(404).json({ message: "Salon not found" });
 
-  const { customerName, customerPhone, customerEmail, scheduledAt, serviceId, notes, paymentMode } = req.body;
+  const { customerName, customerPhone, customerEmail, scheduledAt, startAt, serviceId, notes, paymentMode } = req.body;
   
   // Find or create customer
   let customer = null;
@@ -698,15 +700,36 @@ const handleCreateBooking = asyncHandler(async (req, res) => {
     }
   }
 
+  const bookingStart = startAt || scheduledAt ? new Date(startAt || scheduledAt) : new Date();
+  const bookingEnd = new Date(bookingStart.getTime() + 60 * 60 * 1000);
   const orderNum = "BK-" + Date.now().toString().slice(-6);
+
+  let svcPrice = 0;
+  if (serviceId) {
+    const s = await prisma.service.findUnique({ where: { id: serviceId } });
+    if (s) svcPrice = Number(s.price || 0);
+  }
+
   const appt = await prisma.appointment.create({
     data: {
       salonId: salon.id,
       customerId: customer?.id || null,
-      serviceId: serviceId || null,
-      scheduledAt: scheduledAt ? new Date(scheduledAt) : new Date(),
+      startAt: bookingStart,
+      endAt: bookingEnd,
       status: "CONFIRMED",
-      notes: notes || "Online Storefront Booking (" + orderNum + ")"
+      notes: notes || "Online Storefront Booking (" + orderNum + ")",
+      items: serviceId ? {
+        create: [{
+          serviceId,
+          price: svcPrice,
+          startAt: bookingStart,
+          endAt: bookingEnd
+        }]
+      } : undefined
+    },
+    include: {
+      items: { include: { service: true } },
+      customer: true
     }
   });
 
@@ -731,8 +754,8 @@ const handleMyBookings = asyncHandler(async (req, res) => {
 
   const appts = await prisma.appointment.findMany({
     where,
-    include: { customer: true, service: true },
-    orderBy: { scheduledAt: "desc" },
+    include: { customer: true, items: { include: { service: true } } },
+    orderBy: { startAt: "desc" },
     take: 20
   });
   res.json(appts);

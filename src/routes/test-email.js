@@ -87,11 +87,12 @@ testEmailRouter.get("/send", async (req, res) => {
 });
 
 testEmailRouter.get("/send-all", async (req, res) => {
-  const TO = req.query.to || "ahmedbilalkhangl09@gmail.com";
+  try {
+    const TO = req.query.to || "ahmedbilalkhangl09@gmail.com";
 
-  const salonName = await getSalonName(req.query.salonId);
-  const salonCurrency = await getSalonCurrency(req.query.salonId);
-  const vars = { salon_name: salonName, customer_name: "there", currency_symbol: salonCurrency };
+    const salonName = await getSalonName(req.query.salonId);
+    const salonCurrency = await getSalonCurrency(req.query.salonId);
+    const vars = { salon_name: salonName, customer_name: "there", currency_symbol: salonCurrency };
 
   const allTemplates = [
     {
@@ -513,7 +514,10 @@ testEmailRouter.get("/send-all", async (req, res) => {
     }
   }
 
-  res.json({ total: allTemplates.length, sent: results.filter(r => r.status === "sent").length, failed: results.filter(r => r.status === "failed").length, details: results });
+    res.json({ total: allTemplates.length, sent: results.filter(r => r.status === "sent").length, failed: results.filter(r => r.status === "failed").length, details: results });
+  } catch (globalErr) {
+    res.status(500).json({ success: false, error: globalErr.message || String(globalErr) });
+  }
 });
 
 // GET /test-email/health - Check SMTP configuration

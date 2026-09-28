@@ -5,7 +5,7 @@ import { defaultOwnerPermissions } from "../lib/permissions.js";
 export const authMiddleware = async (req, res, next) => {
   try {
     const url = req.originalUrl || req.path || "";
-    if (url.startsWith("/api/v1/public") || url.startsWith("/api/v1/auth") || url.includes("/test-email") || url.includes("/uploads") || url.includes("/zoho/callback") || url.includes("/health") || url.includes("/ready")) {
+    if (url.startsWith("/api/v1/public") || url.startsWith("/api/v1/auth") || url.startsWith("/api/v1/customer/login") || url.startsWith("/api/v1/customer/register") || url.includes("/test-email") || url.includes("/uploads") || url.includes("/zoho/callback") || url.includes("/health") || url.includes("/ready")) {
       return next();
     }
     let token = null;

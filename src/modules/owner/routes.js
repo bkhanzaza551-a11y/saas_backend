@@ -501,7 +501,7 @@ ownerRouter.get("/global-search", requireSalonPermission("customers", "view"), a
     safe(prisma.userSalon.findMany({
       where: { salonId, ...branchFilter, user: { name: term } },
       take: 5,
-      orderBy: { createdAt: "desc" },
+      orderBy: { joiningDate: "desc" },
       select: { id: true, user: { select: { name: true, email: true } }, salonRole: true }
     })),
     safe(prisma.appointment.findMany({

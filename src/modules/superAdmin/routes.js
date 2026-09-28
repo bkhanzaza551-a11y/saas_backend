@@ -1,5 +1,6 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { prisma } from "../../lib/prisma.js";
 import { requireAuth, requireSystemRole } from "../../middlewares/rbac.js";
 import { validate, schemas } from "../../middlewares/validate.js";
@@ -1041,6 +1042,11 @@ superAdminRouter.post("/subscriptions/:id/remind", asyncHandler(async (req, res)
   if (!owner?.user) return res.status(404).json({ message: "No salon owner found for this subscription." });
 
   const frontendUrl = process.env.FRONTEND_APP_URL || "https://saas-frontend-delta-one.vercel.app";
+  const loginAccessToken = signLoginAccessToken({
+    userId: owner.user.id,
+    email: owner.user.email,
+    salonId: subscription.salonId
+  });
   const loginLink = `${frontendUrl}/login?email=${encodeURIComponent(owner.user.email)}&access=${encodeURIComponent(loginAccessToken)}`;
   const diffMs = new Date(subscription.endsAt) - new Date();
   const daysLeft = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
@@ -1566,15 +1572,17 @@ superAdminRouter.patch("/support-tickets/:id", asyncHandler(async (req, res) => 
   const updated = await prisma.$transaction(async (tx) => {
     const row = await tx.supportTicket.update({ where: { id: req.params.id }, data: req.body });
       if (req.body.assignedToId && req.body.assignedToId !== ticket.assignedToId) {
-        await tx.notification.create({
-          data: {
-            userId: req.body.assignedToId,
-            title: "Ticket Assigned",
-            message: `Support Ticket #${row.id.slice(-6)} "${row.title}" has been assigned to you.`,
-            type: "ASSIGNMENT",
-            link: `/super-admin/support`
-          }
-        });
+        if (ticket.salonId) {
+          await tx.notification.create({
+            data: {
+              salonId: ticket.salonId,
+              title: "Ticket Assigned",
+              message: `Support Ticket #${row.id.slice(-6)} "${row.title}" has been assigned.`,
+              type: "ASSIGNMENT",
+              linkUrl: `/super-admin/support-tickets`
+            }
+          }).catch(() => null);
+        }
       }
     const eventMessages = [];
     if (req.body.status && req.body.status !== ticket.status) {
@@ -1907,16 +1915,16 @@ superAdminRouter.patch("/staff-requirements/:id", asyncHandler(async (req, res) 
   if (data.department && data.department !== existing.department) {
     // try to find the user by name to notify them
     const assignedUser = await prisma.user.findFirst({ where: { name: { equals: data.department, mode: "insensitive" }, systemRole: "SUPER_ADMIN" } });
-    if (assignedUser) {
+    if (assignedUser && updated.salonId) {
       await prisma.notification.create({
         data: {
-          userId: assignedUser.id,
+          salonId: updated.salonId,
           title: "Staff Request Assigned",
-          message: `Staff Request for "${updated.position || updated.title}" has been assigned to you.`,
+          message: `Staff Request for "${updated.position || updated.title}" has been assigned to department: ${data.department}.`,
           type: "ASSIGNMENT",
-          link: `/super-admin/staff-requests`
+          linkUrl: `/super-admin/staff-requests`
         }
-      });
+      }).catch(() => null);
     }
   }
   res.json(updated);
@@ -2542,30 +2550,37 @@ superAdminRouter.delete("/product-catalog/:id", asyncHandler(async (req, res) =>
 superAdminRouter.post("/salons/:id/resend-owner-invite", asyncHandler(async (req, res) => { 
   const salonId = req.params.id;
   const userSalon = await prisma.userSalon.findFirst({
-    where: { salonId, role: "OWNER" },
+    where: { salonId, salonRole: "SALON_OWNER", isArchived: false },
     include: { user: true }
   });
   if (!userSalon || !userSalon.user) return res.status(404).json({ message: "Owner not found" });
   
-  const token = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  const rawToken = crypto.randomBytes(32).toString("hex");
+  const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
   await prisma.passwordSetupToken.create({
     data: {
-      token,
+      tokenHash,
       userId: userSalon.userId,
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
     }
   });
 
-  const { sendMail } = require("../../../lib/emailNotifications");
-  const link = `https://saas-frontend-delta-one.vercel.app/setup-password?token=${token}`;
-  
-  await sendMail(
-    userSalon.user.email,
-    "Your Salon Account is Ready - Setup Password",
-    `<p>Hello ${userSalon.user.name},</p><p>Your account is ready. Click the link to setup your password:</p><p><a href="${link}">${link}</a></p>`
-  ).catch(err => console.error("Email error:", err));
+  const loginAccessToken = signLoginAccessToken({
+    userId: userSalon.userId,
+    email: userSalon.user.email,
+    salonId
+  });
 
-  res.json({ success: true, message: "Invite resent." }); 
+  const frontendUrl = process.env.FRONTEND_APP_URL || "https://saas-frontend-delta-one.vercel.app";
+  const link = `${frontendUrl}/setup-password?token=${rawToken}&email=${encodeURIComponent(userSalon.user.email)}&access=${encodeURIComponent(loginAccessToken)}`;
+  
+  await sendMail({
+    to: userSalon.user.email,
+    subject: "Your Salon Account is Ready - Setup Password",
+    html: `<p>Hello ${userSalon.user.name},</p><p>Your salon account has been activated. Click the link below to set up your password:</p><p><a href="${link}">${link}</a></p>`
+  }).catch(err => console.error("Email error:", err));
+
+  res.json({ success: true, message: "Invite resent successfully." }); 
 }));
 
 superAdminRouter.get("/salons/:id/export/:type", asyncHandler(async (req, res) => { 
