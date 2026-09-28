@@ -51,6 +51,147 @@ const defaultFeatureFlags = {
 };
 const fullFeatureFlags = (featureFlags) => ({ ...defaultFeatureFlags, ...(featureFlags || {}) });
 
+export const AVAILABLE_PAGES = [
+  { key: "dashboard", id: "dashboard", label: "Dashboard", name: "Dashboard", group: "Overview & CRM" },
+  { key: "sales-pipeline", id: "sales-pipeline", label: "Sales CRM / Pipeline", name: "Sales CRM", group: "Overview & CRM" },
+  { key: "salons", id: "salons", label: "Salon Management", name: "Salon Management", group: "Operations & Salons" },
+  { key: "product-requests", id: "product-requests", label: "Product Requests", name: "Product Requests", group: "Operations & Salons" },
+  { key: "staff-requests", id: "staff-requests", label: "Staff Requests", name: "Staff Requests", group: "Operations & Salons" },
+  { key: "subscriptions", id: "subscriptions", label: "Customer Subscriptions", name: "Customer Subscriptions", group: "Billing & Subscriptions" },
+  { key: "plans", id: "plans", label: "Plans Catalog", name: "Plans Catalog", group: "Billing & Subscriptions" },
+  { key: "finance", id: "finance", label: "Finance & Revenue", name: "Finance & Revenue", group: "Billing & Subscriptions" },
+  { key: "support-tickets", id: "support-tickets", label: "Support Queue", name: "Support Queue", group: "Support & Helpdesk" },
+  { key: "credits", id: "credits", label: "Credit Management", name: "Credit Management", group: "Administration & Governance" },
+  { key: "staff", id: "staff", label: "Team & Roles", name: "Team & Roles", group: "Administration & Governance" },
+  { key: "settings", id: "settings", label: "Platform Settings", name: "Platform Settings", group: "Administration & Governance" },
+  { key: "audit-logs", id: "audit-logs", label: "Audit Logs", name: "Audit Logs", group: "Administration & Governance" }
+];
+
+export const DEFAULT_SUPER_ADMIN_ROLES = [
+  {
+    id: "super_admin",
+    name: "Super Admin",
+    description: "Full system administration and control",
+    permissions: {
+      dashboard: true,
+      "sales-pipeline": true,
+      salons: true,
+      "product-requests": true,
+      "staff-requests": true,
+      subscriptions: true,
+      plans: true,
+      finance: true,
+      "support-tickets": true,
+      credits: true,
+      staff: true,
+      settings: true,
+      "audit-logs": true
+    },
+    pagePermissions: ["*"]
+  },
+  {
+    id: "support_agent",
+    name: "Support Agent",
+    description: "Manage tickets, requests and salons",
+    permissions: {
+      dashboard: true,
+      "support-tickets": true,
+      "product-requests": true,
+      "staff-requests": true,
+      salons: true
+    },
+    pagePermissions: ["dashboard", "support-tickets", "product-requests", "staff-requests", "salons"]
+  },
+  {
+    id: "sales_rep",
+    name: "Sales Representative",
+    description: "Manage demo pipeline, salons and plans",
+    permissions: {
+      dashboard: true,
+      "sales-pipeline": true,
+      salons: true,
+      subscriptions: true,
+      plans: true
+    },
+    pagePermissions: ["dashboard", "sales-pipeline", "salons", "subscriptions", "plans"]
+  },
+  {
+    id: "finance_mgr",
+    name: "Finance Manager",
+    description: "Manage revenue, finance, subscriptions and pricing",
+    permissions: {
+      dashboard: true,
+      finance: true,
+      subscriptions: true,
+      plans: true
+    },
+    pagePermissions: ["dashboard", "finance", "subscriptions", "plans"]
+  },
+  {
+    id: "operations_mgr",
+    name: "Operations Manager",
+    description: "Manage salon operations, inventory and staffing requests",
+    permissions: {
+      dashboard: true,
+      salons: true,
+      subscriptions: true,
+      "product-requests": true,
+      "staff-requests": true
+    },
+    pagePermissions: ["dashboard", "salons", "subscriptions", "product-requests", "staff-requests"]
+  }
+];
+
+export const isFullAdmin = async (req) => {
+  if (!req.user) return false;
+  const user = req.user;
+  const adminRoleId = user.pagePermissions?.adminRoleId;
+  if (!adminRoleId) return true;
+  if (adminRoleId === "super_admin" || adminRoleId === "full_access") return true;
+
+  try {
+    const gs = await prisma.globalSetting.findFirst();
+    const roles = gs?.notificationDefaults?.adminRoles || DEFAULT_SUPER_ADMIN_ROLES;
+    const role = roles.find(r => r.id === adminRoleId);
+    if (!role) return true;
+    if (role.isFullAccess || role.id === "super_admin" || role.permissions?.["*"] || role.permissions?.all || role.pagePermissions?.includes("*")) {
+      return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+};
+
+superAdminRouter.get("/notifications", asyncHandler(async (req, res) => {
+  const limit = Math.min(Number(req.query.limit || 10), 50);
+  const rows = await prisma.auditLog.findMany({
+    take: limit,
+    orderBy: { createdAt: "desc" },
+    include: { salon: { select: { id: true, name: true } } }
+  });
+
+  const formatted = rows.map(r => ({
+    id: r.id,
+    title: r.entityType ? `${r.entityType.replace(/_/g, " ")}: ${r.action}` : (r.action || "System Event"),
+    message: r.details?.message || r.details?.note || (r.salon?.name ? `Salon: ${r.salon.name}` : `Activity recorded on ${r.entityType || "System"}`),
+    type: r.action || "INFO",
+    linkUrl: r.entityType === "SALON" && r.entityId ? `/super-admin/salons/${r.entityId}` : (r.entityType === "DEMO_LEAD" ? "/super-admin/sales-pipeline" : null),
+    isRead: false,
+    createdAt: r.createdAt
+  }));
+
+  res.json(formatted);
+}));
+
+superAdminRouter.patch("/notifications/read-all", asyncHandler(async (req, res) => {
+  res.json({ ok: true });
+}));
+
+superAdminRouter.patch("/notifications/:id/read", asyncHandler(async (req, res) => {
+  res.json({ ok: true });
+}));
+
 superAdminRouter.get("/dashboard", asyncHandler(async (req, res) => {
   const period = String(req.query.period || "lifetime").toLowerCase();
   const now = new Date();
@@ -1910,97 +2051,6 @@ superAdminRouter.delete("/branches/:id", asyncHandler(async (req, res) => {
   await prisma.branch.delete({ where: { id: req.params.id } });
   res.json({ message: "Deleted" });
 }));
-
-const AVAILABLE_PAGES = [
-  { key: "dashboard", id: "dashboard", label: "Dashboard", name: "Dashboard", group: "Overview & CRM" },
-  { key: "sales-pipeline", id: "sales-pipeline", label: "Sales CRM / Pipeline", name: "Sales CRM", group: "Overview & CRM" },
-  { key: "salons", id: "salons", label: "Salon Management", name: "Salon Management", group: "Operations & Salons" },
-  { key: "product-requests", id: "product-requests", label: "Product Requests", name: "Product Requests", group: "Operations & Salons" },
-  { key: "staff-requests", id: "staff-requests", label: "Staff Requests", name: "Staff Requests", group: "Operations & Salons" },
-  { key: "subscriptions", id: "subscriptions", label: "Customer Subscriptions", name: "Customer Subscriptions", group: "Billing & Subscriptions" },
-  { key: "plans", id: "plans", label: "Plans Catalog", name: "Plans Catalog", group: "Billing & Subscriptions" },
-  { key: "finance", id: "finance", label: "Finance & Revenue", name: "Finance & Revenue", group: "Billing & Subscriptions" },
-  { key: "support-tickets", id: "support-tickets", label: "Support Queue", name: "Support Queue", group: "Support & Helpdesk" },
-  { key: "credits", id: "credits", label: "Credit Management", name: "Credit Management", group: "Administration & Governance" },
-  { key: "staff", id: "staff", label: "Team & Roles", name: "Team & Roles", group: "Administration & Governance" },
-  { key: "settings", id: "settings", label: "Platform Settings", name: "Platform Settings", group: "Administration & Governance" },
-  { key: "audit-logs", id: "audit-logs", label: "Audit Logs", name: "Audit Logs", group: "Administration & Governance" }
-];
-
-const DEFAULT_SUPER_ADMIN_ROLES = [
-  {
-    id: "super_admin",
-    name: "Super Admin",
-    description: "Full system administration and control",
-    permissions: {
-      dashboard: true,
-      "sales-pipeline": true,
-      salons: true,
-      "product-requests": true,
-      "staff-requests": true,
-      subscriptions: true,
-      plans: true,
-      finance: true,
-      "support-tickets": true,
-      credits: true,
-      staff: true,
-      settings: true,
-      "audit-logs": true
-    },
-    pagePermissions: ["*"]
-  },
-  {
-    id: "support_agent",
-    name: "Support Agent",
-    description: "Manage tickets, requests and salons",
-    permissions: {
-      dashboard: true,
-      "support-tickets": true,
-      "product-requests": true,
-      "staff-requests": true,
-      salons: true
-    },
-    pagePermissions: ["dashboard", "support-tickets", "product-requests", "staff-requests", "salons"]
-  },
-  {
-    id: "sales_rep",
-    name: "Sales Representative",
-    description: "Manage demo pipeline, salons and plans",
-    permissions: {
-      dashboard: true,
-      "sales-pipeline": true,
-      salons: true,
-      subscriptions: true,
-      plans: true
-    },
-    pagePermissions: ["dashboard", "sales-pipeline", "salons", "subscriptions", "plans"]
-  },
-  {
-    id: "finance_mgr",
-    name: "Finance Manager",
-    description: "Manage revenue, finance, subscriptions and pricing",
-    permissions: {
-      dashboard: true,
-      finance: true,
-      subscriptions: true,
-      plans: true
-    },
-    pagePermissions: ["dashboard", "finance", "subscriptions", "plans"]
-  },
-  {
-    id: "operations_mgr",
-    name: "Operations Manager",
-    description: "Manage salon operations, inventory and staffing requests",
-    permissions: {
-      dashboard: true,
-      salons: true,
-      subscriptions: true,
-      "product-requests": true,
-      "staff-requests": true
-    },
-    pagePermissions: ["dashboard", "salons", "subscriptions", "product-requests", "staff-requests"]
-  }
-];
 
 superAdminRouter.get("/available-pages", asyncHandler(async (req, res) => {
   res.json(AVAILABLE_PAGES);
