@@ -473,8 +473,8 @@ export const schemas = {
     body: z.object({
       customerId: idSchema,
       branchId: z.string().optional(),
-      appointmentId: z.string().max(50).optional(),
-      appliedMembershipId: z.string().max(50).optional(),
+      appointmentId: z.string().max(50).nullable().optional(),
+      appliedMembershipId: z.string().max(50).nullable().optional(),
       mode: z.enum(["draft", "complete", "start"]).optional(),
       discount: z.number().min(0).max(9999999).default(0),
       tax: z.number().min(0).max(9999999).default(0),

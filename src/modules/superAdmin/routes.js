@@ -193,6 +193,41 @@ superAdminRouter.patch("/notifications/:id/read", asyncHandler(async (req, res) 
   res.json({ ok: true });
 }));
 
+
+superAdminRouter.get("/global-search", asyncHandler(async (req, res) => {
+  const q = String(req.query.q || req.query.query || "").trim();
+  if (!q || q.length < 2) return res.json({ salons: [], leads: [], tickets: [], plans: [] });
+
+  const [salons, leads, tickets, plans] = await Promise.all([
+    prisma.salon.findMany({
+      where: { OR: [{ name: { contains: q, mode: "insensitive" } }, { slug: { contains: q, mode: "insensitive" } }] },
+      take: 5,
+      select: { id: true, name: true, slug: true, status: true }
+    }),
+    prisma.demoLead.findMany({
+      where: { OR: [{ name: { contains: q, mode: "insensitive" } }, { salonName: { contains: q, mode: "insensitive" } }, { phone: { contains: q } }] },
+      take: 5,
+      select: { id: true, name: true, salonName: true, status: true }
+    }),
+    prisma.supportTicket.findMany({
+      where: { OR: [{ title: { contains: q, mode: "insensitive" } }, { id: { contains: q } }] },
+      take: 5,
+      include: { salon: { select: { name: true } } }
+    }),
+    prisma.plan.findMany({
+      where: { name: { contains: q, mode: "insensitive" } },
+      take: 5
+    })
+  ]);
+
+  res.json({
+    salons: salons.map(s => ({ id: s.id, title: s.name, subtitle: `Status: ${s.status}`, url: `/super-admin/salons/${s.id}`, type: "Salon" })),
+    leads: leads.map(l => ({ id: l.id, title: l.salonName || l.name, subtitle: `Lead: ${l.name}`, url: `/super-admin/demo-leads`, type: "Demo Lead" })),
+    tickets: tickets.map(t => ({ id: t.id, title: t.title, subtitle: t.salon?.name || "Support Ticket", url: `/super-admin/tickets`, type: "Ticket" })),
+    plans: plans.map(p => ({ id: p.id, title: p.name, subtitle: `Plan: ₹${p.monthlyPrice}/mo`, url: `/super-admin/plans`, type: "Plan" }))
+  });
+}));
+
 superAdminRouter.get("/dashboard", asyncHandler(async (req, res) => {
   const period = String(req.query.period || "lifetime").toLowerCase();
   const now = new Date();
@@ -373,6 +408,8 @@ superAdminRouter.get("/dashboard", asyncHandler(async (req, res) => {
     recentLeads,
     recentTickets,
     recentActivity: recentActivityLogs,
+    recentProductRequestsList: [],
+    recentStaffRequestsList: [],
     period,
     dateRange: { startDate, endDate }
   });
