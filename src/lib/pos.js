@@ -639,6 +639,16 @@ export const createPosInvoice = async ({ salonId, actorUser, body }) => {
       type: "PAYMENT"
     });
   });
+  const membershipWalletTotal = itemDrafts.reduce((sum, item) => sum + toAmount(item.membershipWalletUsed), 0);
+  const hasExplicitMembershipWalletPayment = (body.payments || []).some((p) => p.mode === "WALLET");
+  if (membershipWalletTotal > 0 && !hasExplicitMembershipWalletPayment) {
+    autoPayments.push({
+      mode: "WALLET",
+      amount: membershipWalletTotal,
+      note: `Membership wallet applied: ${membership?.membershipPlan?.name || "Membership"}`,
+      type: "PAYMENT"
+    });
+  }
   const allPayments = [...autoPayments, ...(body.payments || [])];
   const initialPaidAmount = allPayments
     .filter(p => p.mode !== "BALANCE")
