@@ -562,6 +562,12 @@ ownerRouter.get("/global-search", requireSalonPermission("customers", "view"), a
 });
 
 ownerRouter.get("/branches", requireSalonPermission("branches", "view"), async (req, res) => {
+  const salon = await prisma.salon.findUnique({ where: { id: req.salonId }, select: { name: true } });
+  const ownerMembership = await prisma.userSalon.findFirst({
+    where: { salonId: req.salonId, salonRole: "SALON_OWNER" },
+    include: { user: { select: { name: true, email: true } } }
+  });
+
   const rows = await prisma.branch.findMany({
     where: { salonId: req.salonId, isActive: true },
     include: {
@@ -569,8 +575,23 @@ ownerRouter.get("/branches", requireSalonPermission("branches", "view"), async (
         select: { users: true, services: true, invoices: true }
       }
     },
-    orderBy: { createdAt: "desc" }
+    orderBy: { createdAt: "asc" }
   });
+
+  if (salon?.name) {
+    const ownerName = ownerMembership?.user?.name;
+    const ownerEmailPrefix = ownerMembership?.user?.email?.split("@")[0];
+    for (const b of rows) {
+      if ((ownerName && b.name === ownerName) || (ownerEmailPrefix && b.name === ownerEmailPrefix) || b.name === "fifoviw518") {
+        await prisma.branch.update({
+          where: { id: b.id },
+          data: { name: salon.name }
+        }).catch(() => {});
+        b.name = salon.name;
+      }
+    }
+  }
+
   res.json(rows);
 });
 
