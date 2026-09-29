@@ -269,7 +269,7 @@ authRouter.post("/login", validate(schemas.login), async (req, res) => {
     sendSms({
       salonId: targetSalonId,
       to: targetPhone,
-      message: `Your login OTP for SalonNest is ${otp}. Valid for 10 minutes.`
+      message: `Your SalonNest verification OTP is ${otp}. Do not share this with anyone.`
     }).catch(e => console.error("OTP SMS failed", e));
   }
 
