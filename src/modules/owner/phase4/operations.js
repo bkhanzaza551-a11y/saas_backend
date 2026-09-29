@@ -84,17 +84,40 @@ const getAttendanceSettings = async (salonId) => {
   const row = await prisma.salonSetting.findFirst({ where: { salonId, branchId: null } });
   return mergeAttendanceSettings(row?.advancedSettings?.attendanceSettings);
 };
-const resolveAttendanceStatus = ({ attendanceDate, checkInAt, checkOutAt, workedMinutes, settings }) => {
-  if (!checkInAt) return "ABSENT";
-  if (!checkOutAt) return "WORKING";
-  const lateAfter = parseTimeOnDate(attendanceDate, settings.lateAfterTime);
-  const halfDayThreshold = Number(settings.halfDayMinutes || DEFAULT_ATTENDANCE_SETTINGS.halfDayMinutes);
-  const minWork = Number(settings.minimumWorkingMinutes || DEFAULT_ATTENDANCE_SETTINGS.minimumWorkingMinutes);
-  if (workedMinutes < halfDayThreshold) return "HALF_DAY";
-  if (new Date(checkInAt) > lateAfter) return "LATE";
-  if (workedMinutes >= minWork) return "COMPLETED_SHIFT";
-  return "PRESENT";
+const extractBranchOpeningTime = (branch, settings) => {
+  if (branch?.businessHours) {
+    const match = String(branch.businessHours).match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+    if (match) {
+      let h = parseInt(match[1], 10);
+      const m = parseInt(match[2], 10);
+      const ampm = match[3] ? match[3].toUpperCase() : null;
+      if (ampm === "PM" && h < 12) h += 12;
+      if (ampm === "AM" && h === 12) h = 0;
+      // 15 minutes grace period
+      const totalMinutes = h * 60 + m + 15;
+      const graceH = Math.floor(totalMinutes / 60) % 24;
+      const graceM = totalMinutes % 60;
+      return `${String(graceH).padStart(2, "0")}:${String(graceM).padStart(2, "0")}`;
+    }
+  }
+  return settings?.lateAfterTime || "09:15";
 };
+
+const resolveAttendanceStatus = ({ attendanceDate, checkInAt, checkOutAt, workedMinutes, settings, branch }) => {
+  if (!checkInAt) return "NOT_CHECKED_IN";
+  const lateTimeStr = extractBranchOpeningTime(branch, settings);
+  const lateAfter = parseTimeOnDate(attendanceDate, lateTimeStr);
+  const isLate = new Date(checkInAt) > lateAfter;
+
+  if (!checkOutAt) {
+    return isLate ? "LATE" : "PRESENT";
+  }
+  const halfDayThreshold = Number(settings?.halfDayMinutes || DEFAULT_ATTENDANCE_SETTINGS.halfDayMinutes);
+  if (workedMinutes != null && workedMinutes < halfDayThreshold) return "HALF_DAY";
+  if (isLate) return "LATE";
+  return "CHECKED_OUT";
+};
+
 const validateGeofence = ({ branch, latitude, longitude }) => {
   const branchLatitude = toDecimalNumber(branch?.latitude);
   const branchLongitude = toDecimalNumber(branch?.longitude);
@@ -298,7 +321,7 @@ const buildAttendanceExportRows = (rows) => rows.map((row, index) => ({
 
 export const registerOperationsRoutes = (ownerRouter) => {
   ownerRouter.get("/operations/global-dashboard", requireSalonPermission("dashboard", "view"), async (req, res) => {
-    const { startDate, endDate } = req.query;
+    const { startDate, endDate, branchId } = req.query;
     const dateFilter = {};
     if (startDate && endDate) {
       dateFilter.createdAt = {
@@ -307,15 +330,75 @@ export const registerOperationsRoutes = (ownerRouter) => {
       };
     }
 
-    const branches = await prisma.branch.findMany({ where: { salonId: req.salonId, isActive: true } });
-    const invoices = await prisma.invoice.findMany({ where: { salonId: req.salonId, status: "PAID", ...dateFilter }, select: { total: true, branchId: true } });
-    const appointments = await prisma.appointment.count({ where: { salonId: req.salonId, status: { not: "CANCELLED" }, ...dateFilter } });
+    const branchFilter = branchId ? { id: branchId } : {};
+    const branches = await prisma.branch.findMany({ where: { salonId: req.salonId, isActive: true, ...branchFilter } });
+    const invoices = await prisma.invoice.findMany({
+      where: {
+        salonId: req.salonId,
+        status: "PAID",
+        ...(branchId ? { branchId } : {}),
+        ...dateFilter
+      },
+      select: { total: true, branchId: true }
+    });
+    const appointments = await prisma.appointment.count({
+      where: {
+        salonId: req.salonId,
+        status: { not: "CANCELLED" },
+        ...(branchId ? { branchId } : {}),
+        ...dateFilter
+      }
+    });
     const customers = await prisma.customer.count({ where: { salonId: req.salonId, ...dateFilter } });
-    
+
+    const todayStart = startOfAttendanceDay(new Date());
+    const todayEnd = endOfAttendanceDay(todayStart);
+    const [allStaff, todayAttendanceRecords, todayLeaves] = await Promise.all([
+      prisma.userSalon.findMany({
+        where: {
+          salonId: req.salonId,
+          isArchived: false,
+          ...(branchId ? { OR: [{ branchId }, { branchId: null }] } : {}),
+          user: { isActive: true }
+        },
+        select: { id: true, branchId: true }
+      }),
+      prisma.attendanceRecord.findMany({
+        where: {
+          salonId: req.salonId,
+          ...(branchId ? { branchId } : {}),
+          attendanceDate: { gte: todayStart, lt: todayEnd }
+        }
+      }),
+      prisma.leaveRequest.findMany({
+        where: {
+          salonId: req.salonId,
+          status: "APPROVED",
+          startDate: { lt: todayEnd },
+          endDate: { gte: todayStart }
+        }
+      })
+    ]);
+
+    const leaveStaffIds = new Set(todayLeaves.map((l) => l.userSalonId));
+    const totalStaffCount = allStaff.length;
+    const presentCount = todayAttendanceRecords.filter((r) => ["PRESENT", "WORKING", "CHECKED_OUT"].includes(r.status)).length;
+    const lateCount = todayAttendanceRecords.filter((r) => r.status === "LATE").length;
+    const onLeaveCount = leaveStaffIds.size;
+    const absentCount = todayAttendanceRecords.filter((r) => r.status === "ABSENT").length;
+    const attendingTotal = presentCount + lateCount;
+    const attendancePct = totalStaffCount > 0
+      ? Math.min(100, Math.round((attendingTotal / Math.max(1, totalStaffCount - onLeaveCount)) * 100))
+      : 0;
+
     const totalRevenue = invoices.reduce((sum, inv) => sum + Number(inv.total || 0), 0);
-    const branchPerformance = branches.map(b => {
-      const branchInvoices = invoices.filter(inv => inv.branchId === b.id);
+    const branchPerformance = branches.map((b) => {
+      const branchInvoices = invoices.filter((inv) => inv.branchId === b.id);
       const rev = branchInvoices.reduce((sum, inv) => sum + Number(inv.total || 0), 0);
+      const branchStaff = allStaff.filter((s) => s.branchId === b.id);
+      const branchAtt = todayAttendanceRecords.filter((r) => r.branchId === b.id);
+      const bPresent = branchAtt.filter((r) => ["PRESENT", "WORKING", "CHECKED_OUT"].includes(r.status)).length;
+      const bLate = branchAtt.filter((r) => r.status === "LATE").length;
       return {
         id: b.id,
         name: b.name,
@@ -323,12 +406,14 @@ export const registerOperationsRoutes = (ownerRouter) => {
         revenue: rev,
         appointments: 0,
         growth: "+0%",
-        staffCount: 0,
+        staffCount: branchStaff.length,
+        presentStaff: bPresent,
+        lateStaff: bLate,
         rating: 4.8,
         status: rev > 1000 ? "TOP PERFORMER" : "STEADY"
       };
     });
-    
+
     res.json({
       totalRevenue,
       totalAppointments: appointments,
@@ -337,6 +422,14 @@ export const registerOperationsRoutes = (ownerRouter) => {
       revenueGrowth: "+0%",
       appointmentGrowth: "+0%",
       branchPerformance,
+      attendance: {
+        totalStaff: totalStaffCount,
+        present: presentCount,
+        late: lateCount,
+        onLeave: onLeaveCount,
+        absent: absentCount,
+        attendancePercentage: attendancePct
+      },
       growthTrends: [
         { month: "Prev", revenue: totalRevenue * 0.8, appointments: appointments * 0.8 },
         { month: "Curr", revenue: totalRevenue, appointments }
@@ -602,101 +695,125 @@ export const registerOperationsRoutes = (ownerRouter) => {
       ]);
       const leaveSet = new Set(leaves.map((row) => row.userSalonId));
       const recordMap = new Map(records.map((row) => [row.userSalonId, row]));
-      const absentToday = allStaff.filter((row) => !leaveSet.has(row.id) && !recordMap.has(row.id)).length;
+      const isToday = targetDate.getTime() === startOfAttendanceDay(new Date()).getTime();
+      const unrecordedStaff = allStaff.filter((row) => !leaveSet.has(row.id) && !recordMap.has(row.id));
+      const explicitAbsent = records.filter((row) => row.status === "ABSENT").length;
+      const absentToday = isToday ? explicitAbsent : (explicitAbsent + unrecordedStaff.length);
+      const notCheckedIn = isToday ? unrecordedStaff.length : 0;
+      const presentCount = records.filter((row) => ["PRESENT", "WORKING"].includes(row.status)).length;
+      const lateCount = records.filter((row) => row.status === "LATE").length;
+      const checkedOutCount = records.filter((row) => row.status === "CHECKED_OUT" || (Boolean(row.checkOutAt) && !["LATE", "ABSENT", "LEAVE"].includes(row.status))).length;
+      const onLeaveCount = leaveSet.size;
+      const activeAttending = presentCount + lateCount + checkedOutCount;
+      const attendancePercentage = allStaff.length > 0
+        ? Math.min(100, Math.round((activeAttending / Math.max(1, allStaff.length - onLeaveCount)) * 100))
+        : 0;
+
       res.json({
         totalStaff: allStaff.length,
-        presentToday: records.filter((row) => ["PRESENT", "LATE", "HALF_DAY", "WORKING", "COMPLETED_SHIFT"].includes(row.status)).length,
+        presentToday: presentCount,
+        lateStaff: lateCount,
+        checkedOut: checkedOutCount,
         absentToday,
-        lateStaff: records.filter((row) => row.status === "LATE").length,
-        currentlyWorking: records.filter((row) => !row.checkOutAt && row.status !== "LEAVE").length,
-        completedShift: records.filter((row) => Boolean(row.checkOutAt)).length,
-        onLeave: leaveSet.size
+        notCheckedIn,
+        currentlyWorking: records.filter((row) => !row.checkOutAt && row.status !== "LEAVE" && row.status !== "ABSENT").length,
+        completedShift: checkedOutCount,
+        onLeave: onLeaveCount,
+        attendancePercentage
       });
     } catch (err) {
       console.error("attendance summary error:", err);
-      res.json({ totalStaff: 0, presentToday: 0, absentToday: 0, lateStaff: 0, currentlyWorking: 0, completedShift: 0, onLeave: 0 });
+      res.json({ totalStaff: 0, presentToday: 0, absentToday: 0, lateStaff: 0, checkedOut: 0, notCheckedIn: 0, currentlyWorking: 0, completedShift: 0, onLeave: 0, attendancePercentage: 0 });
     }
   });
+
   ownerRouter.get("/attendance/day-sheet", requireFeatureEnabled("attendance"), requireSalonPermission("attendance", "view"), async (req, res) => {
     try {
-    const targetDate = startOfAttendanceDay(req.query.date || new Date());
-    if (isNaN(targetDate.getTime())) return res.json({ date: new Date(), rows: [] });
-    const targetEnd = endOfAttendanceDay(targetDate);
-    const branchId = req.query.branchId ? String(req.query.branchId) : null;
-    const staffRows = await prisma.userSalon.findMany({
-      where: {
-        salonId: req.salonId,
-        isArchived: false,
-        ...(branchId ? { OR: [{ branchId }, { branchId: null }] } : {}),
-        user: { isActive: true }
-      },
-      include: { user: true, branch: true },
-      orderBy: { id: "asc" }
-    });
-    const attendanceRows = await prisma.attendanceRecord.findMany({
-      where: {
-        salonId: req.salonId,
-        ...(branchId ? { branchId } : {}),
-        attendanceDate: { gte: targetDate, lt: targetEnd }
-      },
-      include: { branch: true }
-    });
-    const leaveRows = await prisma.leaveRequest.findMany({
-      where: {
-        salonId: req.salonId,
-        status: "APPROVED",
-        startDate: { lt: targetEnd },
-        endDate: { gte: targetDate }
-      }
-    });
-    const attendanceMap = new Map(attendanceRows.map((row) => [row.userSalonId, row]));
-    const leaveSet = new Set(leaveRows.map((row) => row.userSalonId));
-    const rows = staffRows.map((staff) => {
-      const attendanceRow = attendanceMap.get(staff.id) || null;
-      if (attendanceRow) {
+      const targetDate = startOfAttendanceDay(req.query.date || new Date());
+      if (isNaN(targetDate.getTime())) return res.json({ date: new Date(), rows: [] });
+      const targetEnd = endOfAttendanceDay(targetDate);
+      const branchId = req.query.branchId ? String(req.query.branchId) : null;
+      const staffRows = await prisma.userSalon.findMany({
+        where: {
+          salonId: req.salonId,
+          isArchived: false,
+          ...(branchId ? { OR: [{ branchId }, { branchId: null }] } : {}),
+          user: { isActive: true }
+        },
+        include: { user: true, branch: true },
+        orderBy: { id: "asc" }
+      });
+      const attendanceRows = await prisma.attendanceRecord.findMany({
+        where: {
+          salonId: req.salonId,
+          ...(branchId ? { branchId } : {}),
+          attendanceDate: { gte: targetDate, lt: targetEnd }
+        },
+        include: { branch: true }
+      });
+      const leaveRows = await prisma.leaveRequest.findMany({
+        where: {
+          salonId: req.salonId,
+          status: "APPROVED",
+          startDate: { lt: targetEnd },
+          endDate: { gte: targetDate }
+        }
+      });
+      const attendanceMap = new Map(attendanceRows.map((row) => [row.userSalonId, row]));
+      const leaveSet = new Set(leaveRows.map((row) => row.userSalonId));
+      const isToday = targetDate.getTime() === startOfAttendanceDay(new Date()).getTime();
+
+      const rows = staffRows.map((staff) => {
+        const attendanceRow = attendanceMap.get(staff.id) || null;
+        if (attendanceRow) {
+          let displayStatus = attendanceRow.status;
+          if (attendanceRow.checkOutAt && (displayStatus === "WORKING" || displayStatus === "COMPLETED_SHIFT")) {
+            displayStatus = "CHECKED_OUT";
+          }
+          return {
+            type: "ATTENDANCE",
+            userSalonId: staff.id,
+            staffName: staff.user?.name || staff.id,
+            branchName: attendanceRow.branch?.name || staff.branch?.name || "",
+            status: displayStatus,
+            checkInAt: attendanceRow.checkInAt,
+            checkOutAt: attendanceRow.checkOutAt,
+            workedMinutes: attendanceRow.workedMinutes,
+            attendanceId: attendanceRow.id
+          };
+        }
+        if (leaveSet.has(staff.id)) {
+          return {
+            type: "LEAVE",
+            userSalonId: staff.id,
+            staffName: staff.user?.name || staff.id,
+            branchName: staff.branch?.name || "",
+            status: "LEAVE",
+            checkInAt: null,
+            checkOutAt: null,
+            workedMinutes: null,
+            attendanceId: null
+          };
+        }
         return {
-          type: "ATTENDANCE",
-          userSalonId: staff.id,
-          staffName: staff.user?.name || staff.id,
-          branchName: attendanceRow.branch?.name || staff.branch?.name || "",
-          status: attendanceRow.status,
-          checkInAt: attendanceRow.checkInAt,
-          checkOutAt: attendanceRow.checkOutAt,
-          workedMinutes: attendanceRow.workedMinutes,
-          attendanceId: attendanceRow.id
-        };
-      }
-      if (leaveSet.has(staff.id)) {
-        return {
-          type: "LEAVE",
+          type: isToday ? "NOT_CHECKED_IN" : "ABSENT",
           userSalonId: staff.id,
           staffName: staff.user?.name || staff.id,
           branchName: staff.branch?.name || "",
-          status: "LEAVE",
+          status: isToday ? "NOT_CHECKED_IN" : "ABSENT",
           checkInAt: null,
           checkOutAt: null,
           workedMinutes: null,
           attendanceId: null
         };
-      }
-      return {
-        type: "ABSENT",
-        userSalonId: staff.id,
-        staffName: staff.user?.name || staff.id,
-        branchName: staff.branch?.name || "",
-        status: "ABSENT",
-        checkInAt: null,
-        checkOutAt: null,
-        workedMinutes: null,
-        attendanceId: null
-      };
-    });
-    res.json({ date: targetDate, rows });
+      });
+      res.json({ date: targetDate, rows });
     } catch (err) {
       console.error("day-sheet error:", err);
       res.json({ date: new Date(), rows: [] });
     }
   });
+
   ownerRouter.get("/attendance/reports", requireFeatureEnabled("attendance"), requireSalonPermission("attendance", "view"), async (req, res) => {
     try {
     const period = ["daily", "weekly", "monthly"].includes(String(req.query.period || "").toLowerCase())
@@ -908,15 +1025,32 @@ export const registerOperationsRoutes = (ownerRouter) => {
   });
   ownerRouter.post("/attendance/check-in", requireFeatureEnabled("attendance"), requireSalonPermission("attendance", "create"), validate(schemas.attendance), async (req, res) => {
     try {
+      const membership = await prisma.userSalon.findFirst({
+        where: { id: req.body.userSalonId, salonId: req.salonId },
+        include: { branch: true }
+      });
+      const settings = await getAttendanceSettings(req.salonId);
+      const now = new Date();
+      const attendanceDate = startOfAttendanceDay(req.body.attendanceDate || now);
+      const branch = membership?.branch || null;
+      const status = req.body.status || resolveAttendanceStatus({
+        attendanceDate,
+        checkInAt: now,
+        checkOutAt: null,
+        workedMinutes: null,
+        settings,
+        branch
+      });
       res.status(201).json(await prisma.attendanceRecord.create({
         data: {
           salonId: req.salonId,
-          branchId: req.body.branchId || null,
+          branchId: req.body.branchId || membership?.branchId || null,
           userSalonId: req.body.userSalonId,
           createdByMembershipId: req.user.membershipId || null,
-          attendanceDate: startOfAttendanceDay(new Date()),
-          status: "WORKING",
-          checkInAt: new Date(),
+          attendanceDate,
+          status,
+          verificationMethod: req.body.verificationMethod || "MANUAL",
+          checkInAt: now,
           note: req.body.note || null
         }
       }));
@@ -925,6 +1059,146 @@ export const registerOperationsRoutes = (ownerRouter) => {
       throw e;
     }
   });
+
+  ownerRouter.post("/attendance/biometric-event", requireSalonPermission("attendance", "create"), validate(schemas.attendanceBiometricEvent), async (req, res) => {
+    try {
+      const { staffCode, biometricUserId, userSalonId, eventType, timestamp, deviceId, deviceLocation } = req.body;
+      let membership = null;
+      if (userSalonId) {
+        membership = await prisma.userSalon.findFirst({ where: { id: userSalonId, salonId: req.salonId }, include: { branch: true, user: true } });
+      } else if (staffCode) {
+        membership = await prisma.userSalon.findFirst({
+          where: {
+            salonId: req.salonId,
+            OR: [
+              { id: staffCode },
+              { user: { is: { mobile: staffCode } } },
+              { user: { is: { email: staffCode } } }
+            ]
+          },
+          include: { branch: true, user: true }
+        });
+      } else if (biometricUserId) {
+        membership = await prisma.userSalon.findFirst({
+          where: {
+            salonId: req.salonId,
+            OR: [
+              { id: biometricUserId },
+              { uanNumber: biometricUserId },
+              { user: { is: { mobile: biometricUserId } } }
+            ]
+          },
+          include: { branch: true, user: true }
+        });
+      }
+      if (!membership) {
+        return res.status(404).json({ message: "Staff member not found for biometric identification." });
+      }
+
+      const eventTime = timestamp ? new Date(timestamp) : new Date();
+      const attendanceDate = startOfAttendanceDay(eventTime);
+      const settings = await getAttendanceSettings(req.salonId);
+
+      if (eventType === "CHECK_IN") {
+        const existing = await prisma.attendanceRecord.findFirst({
+          where: {
+            salonId: req.salonId,
+            userSalonId: membership.id,
+            attendanceDate: { gte: attendanceDate, lt: endOfAttendanceDay(attendanceDate) }
+          }
+        });
+        if (existing) {
+          return res.status(409).json({ message: "Attendance record already exists for today.", record: existing });
+        }
+        const status = resolveAttendanceStatus({
+          attendanceDate,
+          checkInAt: eventTime,
+          checkOutAt: null,
+          workedMinutes: null,
+          settings,
+          branch: membership.branch
+        });
+        const created = await prisma.attendanceRecord.create({
+          data: {
+            salonId: req.salonId,
+            branchId: membership.branchId,
+            userSalonId: membership.id,
+            attendanceDate,
+            checkInAt: eventTime,
+            status,
+            verificationMethod: "MANUAL",
+            geoStatus: "INSIDE",
+            adminRemark: `Biometric In [Device: ${deviceId || "N/A"}${deviceLocation ? ` @ ${deviceLocation}` : ""}]`,
+            note: "Biometric Check-In"
+          },
+          include: { branch: true, userSalon: { include: { user: true } } }
+        });
+        createAuditLog({
+          salonId: req.salonId,
+          actorUserId: req.user.userId,
+          actorMembershipId: req.user.membershipId,
+          module: "ATTENDANCE",
+          action: "BIOMETRIC_CHECK_IN",
+          entityType: "AttendanceRecord",
+          entityId: created.id,
+          summary: `Biometric check-in recorded for ${membership.user?.name || membership.id}`,
+          metadata: { deviceId, deviceLocation, status, timestamp: eventTime }
+        }).catch(() => {});
+        return res.status(201).json(created);
+      } else {
+        const existing = await prisma.attendanceRecord.findFirst({
+          where: {
+            salonId: req.salonId,
+            userSalonId: membership.id,
+            checkOutAt: null,
+            attendanceDate: { gte: attendanceDate, lt: endOfAttendanceDay(attendanceDate) }
+          },
+          orderBy: { checkInAt: "desc" }
+        });
+        if (!existing) {
+          return res.status(404).json({ message: "No open check-in record found to check out." });
+        }
+        const workedMinutes = roundMinutesDiff(existing.checkInAt, eventTime);
+        const status = resolveAttendanceStatus({
+          attendanceDate: existing.attendanceDate,
+          checkInAt: existing.checkInAt,
+          checkOutAt: eventTime,
+          workedMinutes,
+          settings,
+          branch: membership.branch
+        });
+        const updated = await prisma.attendanceRecord.update({
+          where: { id: existing.id },
+          data: {
+            checkOutAt: eventTime,
+            workedMinutes,
+            status,
+            adminRemark: existing.adminRemark
+              ? `${existing.adminRemark} | Biometric Out [Device: ${deviceId || "N/A"}]`
+              : `Biometric Out [Device: ${deviceId || "N/A"}]`,
+            note: existing.note ? `${existing.note} | Biometric Check-Out` : "Biometric Check-Out"
+          },
+          include: { branch: true, userSalon: { include: { user: true } } }
+        });
+        createAuditLog({
+          salonId: req.salonId,
+          actorUserId: req.user.userId,
+          actorMembershipId: req.user.membershipId,
+          module: "ATTENDANCE",
+          action: "BIOMETRIC_CHECK_OUT",
+          entityType: "AttendanceRecord",
+          entityId: updated.id,
+          summary: `Biometric check-out recorded for ${membership.user?.name || membership.id}`,
+          metadata: { deviceId, deviceLocation, workedMinutes, status, timestamp: eventTime }
+        }).catch(() => {});
+        return res.json(updated);
+      }
+    } catch (err) {
+      console.error("Biometric event error:", err);
+      res.status(500).json({ message: "Failed to process biometric attendance event" });
+    }
+  });
+
   const requireSelfAttendancePermission = (action) => (req, res, next) => {
     if (req.user.systemRole === "SUPER_ADMIN" || req.user.systemRole === "SALON_OWNER" || req.user.salonRole === "SALON_OWNER") return next();
     const perms = req.user.permissions || {};
@@ -976,7 +1250,16 @@ export const registerOperationsRoutes = (ownerRouter) => {
         geoStatus = geoResult.geoStatus;
         if (isAccurateGPS && geoStatus === "OUTSIDE") return res.status(400).json({ message: `You are ${Math.round(distance)}m from the salon. Allowed radius: ${Math.round(Number(membership.branch?.geofenceRadiusMeters || 200))}m. Please move closer.` });
       }
+      const settings = await getAttendanceSettings(req.salonId);
       const now = new Date();
+      const status = resolveAttendanceStatus({
+        attendanceDate: startOfAttendanceDay(now),
+        checkInAt: now,
+        checkOutAt: null,
+        workedMinutes: null,
+        settings,
+        branch: membership.branch
+      });
       const created = await prisma.attendanceRecord.create({
         data: {
           salonId: req.salonId,
@@ -984,7 +1267,7 @@ export const registerOperationsRoutes = (ownerRouter) => {
           userSalonId: membership.id,
           createdByMembershipId: membership.id,
           attendanceDate: startOfAttendanceDay(now),
-          status: "WORKING",
+          status,
           verificationMethod: req.body.selfieUrl ? "SELFIE_GPS" : "GPS_ONLY",
           geoStatus,
           checkInAt: now,
@@ -1016,6 +1299,7 @@ export const registerOperationsRoutes = (ownerRouter) => {
       res.status(500).json({ message: "Failed to record attendance" });
     }
   });
+
   ownerRouter.post("/attendance/check-out", requireFeatureEnabled("attendance"), requireSalonPermission("attendance", "edit"), validate(schemas.attendance), async (req, res) => {
     try {
       const today = startOfAttendanceDay(new Date());
@@ -1029,15 +1313,15 @@ export const registerOperationsRoutes = (ownerRouter) => {
       if (new Date(checkOutAt) <= new Date(row.checkInAt)) return res.status(400).json({ message: "Check-out time cannot be before check-in time." });
       const workedMinutes = roundMinutesDiff(row.checkInAt, checkOutAt);
       const settings = await getAttendanceSettings(req.salonId);
-      const overtimeThreshold = Number(settings.overtimeThresholdMinutes || DEFAULT_ATTENDANCE_SETTINGS.overtimeThresholdMinutes);
-      const overtimeMinutes = settings.overtimeEnabled && workedMinutes > overtimeThreshold ? workedMinutes - overtimeThreshold : 0;
-      const status = resolveAttendanceStatus({ attendanceDate: row.attendanceDate, checkInAt: row.checkInAt, checkOutAt, workedMinutes, settings });
-      res.json(await prisma.attendanceRecord.update({ where: { id: row.id }, data: { checkOutAt, workedMinutes, overtimeMinutes, status, note: req.body.note || row.note } }));
+      const membership = await prisma.userSalon.findFirst({ where: { id: row.userSalonId }, include: { branch: true } });
+      const status = resolveAttendanceStatus({ attendanceDate: row.attendanceDate, checkInAt: row.checkInAt, checkOutAt, workedMinutes, settings, branch: membership?.branch });
+      res.json(await prisma.attendanceRecord.update({ where: { id: row.id }, data: { checkOutAt, workedMinutes, status, note: req.body.note || row.note } }));
     } catch (err) {
       console.error("admin check-out error:", err);
       res.status(500).json({ message: "Failed to complete check-out" });
     }
   });
+
   ownerRouter.post("/attendance/check-out-self", requireFeatureEnabled("attendance"), requireSelfAttendancePermission("edit"), validate(schemas.attendanceSelfAction), async (req, res) => {
     try {
       const [membership, settings] = await Promise.all([
@@ -1087,15 +1371,12 @@ export const registerOperationsRoutes = (ownerRouter) => {
       const checkOutAt = new Date();
       if (new Date(checkOutAt) <= new Date(row.checkInAt)) return res.status(400).json({ message: "Check-out time cannot be before check-in time." });
       const workedMinutes = roundMinutesDiff(row.checkInAt, checkOutAt);
-      const overtimeThreshold = Number(settings.overtimeThresholdMinutes || DEFAULT_ATTENDANCE_SETTINGS.overtimeThresholdMinutes);
-      const overtimeMinutes = settings.overtimeEnabled && workedMinutes > overtimeThreshold ? workedMinutes - overtimeThreshold : 0;
-      const status = resolveAttendanceStatus({ attendanceDate: row.attendanceDate, checkInAt: row.checkInAt, checkOutAt, workedMinutes, settings });
+      const status = resolveAttendanceStatus({ attendanceDate: row.attendanceDate, checkInAt: row.checkInAt, checkOutAt, workedMinutes, settings, branch: membership.branch });
       const updated = await prisma.attendanceRecord.update({
         where: { id: row.id },
         data: {
           checkOutAt,
           workedMinutes,
-          overtimeMinutes,
           status,
           geoStatus,
           checkOutLatitude: req.body.latitude,
@@ -1124,6 +1405,7 @@ export const registerOperationsRoutes = (ownerRouter) => {
       res.status(500).json({ message: "Failed to complete check-out" });
     }
   });
+
   ownerRouter.get("/my-attendance", requireFeatureEnabled("attendance"), requireSalonPermission("attendance", "view"), async (req, res) => {
     res.json(await prisma.attendanceRecord.findMany({
       where: { salonId: req.salonId, userSalonId: req.user.membershipId },
@@ -1131,6 +1413,7 @@ export const registerOperationsRoutes = (ownerRouter) => {
       orderBy: [{ attendanceDate: "desc" }, { checkInAt: "desc" }]
     }));
   });
+
   ownerRouter.patch("/attendance/:id/manual-update", requireFeatureEnabled("attendance"), requireSalonPermission("attendance", "edit"), validate(schemas.attendanceManualUpdate), async (req, res) => {
     const settings = await getAttendanceSettings(req.salonId);
     if (!settings.allowManualAttendanceEdits) return res.status(403).json({ message: "Manual attendance edits are disabled." });

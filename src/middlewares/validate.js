@@ -1236,9 +1236,9 @@ export const schemas = {
       checkOutAt: optionalDateString,
       note: optionalString,
       attendanceDate: optionalDateString,
-      status: z.enum(["PRESENT", "LATE", "HALF_DAY", "ABSENT", "LEAVE", "WORKING", "COMPLETED_SHIFT"]).optional(),
+      status: z.enum(["PRESENT", "LATE", "HALF_DAY", "CHECKED_OUT", "ABSENT", "LEAVE", "NOT_CHECKED_IN", "WORKING", "COMPLETED_SHIFT"]).optional(),
       adminRemark: optionalString,
-      verificationMethod: z.enum(["MANUAL", "SELFIE_GPS", "GPS_ONLY"]).optional(),
+      verificationMethod: z.enum(["MANUAL", "SELFIE_GPS", "GPS_ONLY", "BIOMETRIC"]).optional(),
       geoStatus: z.enum(["INSIDE", "OUTSIDE", "NOT_CAPTURED"]).optional(),
       checkInLatitude: z.number().min(-90).max(90).optional(),
       checkInLongitude: z.number().min(-180).max(180).optional(),
@@ -1264,10 +1264,22 @@ export const schemas = {
       attendanceDate: optionalDateString,
       checkInAt: optionalDateString,
       checkOutAt: optionalDateString,
-      status: z.enum(["PRESENT", "LATE", "HALF_DAY", "ABSENT", "LEAVE", "WORKING", "COMPLETED_SHIFT"]).optional(),
+      status: z.enum(["PRESENT", "LATE", "HALF_DAY", "CHECKED_OUT", "ABSENT", "LEAVE", "NOT_CHECKED_IN", "WORKING", "COMPLETED_SHIFT"]).optional(),
       adminRemark: optionalString,
       reason: z.string().min(3),
       note: optionalString
+    })
+  }),
+  attendanceBiometricEvent: z.object({
+    body: z.object({
+      staffCode: optionalString,
+      biometricUserId: optionalString,
+      userSalonId: optionalString,
+      eventType: z.enum(["CHECK_IN", "CHECK_OUT"]),
+      timestamp: optionalDateString,
+      deviceId: optionalString,
+      deviceLocation: optionalString,
+      verificationConfidence: z.number().optional()
     })
   }),
   attendanceSettings: z.object({

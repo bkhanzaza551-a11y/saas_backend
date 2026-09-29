@@ -1282,7 +1282,7 @@ export const registerBillingRoutes = (ownerRouter) => {
   });
 
 
-  ownerRouter.get("/pos/day-closing", requireFeatureEnabled("pos"), requireSalonPermission("payments", "view"), async (req, res) => {
+  ownerRouter.get("/pos/day-closing", requireFeatureEnabled("pos"), requireSalonPermission("pos", "view"), async (req, res) => {
     const branchId = normalizeBranchId(req.query.branchId);
     res.json(await getDayClosingSummary({ salonId: req.salonId, branchId, date: req.query.date ? String(req.query.date) : undefined }));
   });
