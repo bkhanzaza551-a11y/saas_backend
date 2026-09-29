@@ -644,12 +644,37 @@ const findPublicSalon = async (slug) => {
 const handleStorefrontServices = asyncHandler(async (req, res) => {
   const salon = await findPublicSalon(req.params.slug);
   if (!salon) return res.status(404).json({ message: "Salon not found" });
+
+  const branchId = req.query.branchId;
+  const where = {
+    salonId: salon.id,
+    isActive: true,
+    hideFromCatalogue: false,
+    ...(branchId ? { OR: [{ branchId }, { branchId: null }] } : {})
+  };
+
   const services = await prisma.service.findMany({
-    where: { salonId: salon.id, isActive: true },
-    include: { category: true },
-    orderBy: { name: "asc" }
+    where,
+    include: {
+      category: true,
+      branch: true,
+      staffAssignments: {
+        include: {
+          userSalon: {
+            include: { user: true }
+          }
+        }
+      }
+    },
+    orderBy: [{ position: "asc" }, { createdAt: "desc" }]
   });
-  res.json(services);
+
+  const mappedServices = services.map(s => ({
+    ...s,
+    durationMinutes: s.durationMin || s.durationMinutes || 30
+  }));
+
+  res.json({ services: mappedServices, total: mappedServices.length });
 });
 publicRouter.get("/salon/:slug/storefront-services", handleStorefrontServices);
 publicRouter.get("/salons/:slug/storefront-services", handleStorefrontServices);

@@ -1143,6 +1143,8 @@ ownerRouter.post("/services", requireSalonPermission("services", "create"), vali
       taxRate: explicitTaxRate ?? (defaultServiceTax?.rate != null ? toAmount(defaultServiceTax.rate) : null),
       commissionPct: req.body.commissionPct != null ? toAmount(req.body.commissionPct) : null,
       position: req.body.position ?? 0,
+      onlineBookingEnabled: req.body.onlineBookingEnabled !== false,
+      isPublicVisible: req.body.isPublicVisible !== false,
       serviceRemainderDays: req.body.serviceRemainderDays ?? 0,
       salonId: req.salonId
     }
