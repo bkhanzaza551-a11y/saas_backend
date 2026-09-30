@@ -302,12 +302,9 @@ export const registerEnquiryRoutes = (ownerRouter) => {
     });
 
     const sampleRows = [
-      ["Pooja Sharma", "9876543210", "pooja.sharma@example.com", "Hair Spa", "Instagram", "HIGH", "NEW", "2500", "2026-03-25", "Interested in bridal package inquiry"],
-      ["Rahul Verma", "9812345678", "rahul.v@example.com", "Beard Trim & Styling", "Walk-in", "MEDIUM", "CONTACTED", "800", "2026-03-22", "Followed up via phone call"],
-      ["Ananya Roy", "9898765432", "ananya.roy@example.com", "Facial & Glow Treatment", "Website", "HIGH", "INTERESTED", "3500", "2026-03-24", "Requested weekend appointment slot"],
-      ["Vikas Kapoor", "9765432109", "vikas.k@example.com", "Men's Haircut", "Referral", "LOW", "NEW", "500", "", "Friend referred by existing member"],
-      ["Simran Kaur", "9988776655", "simran.kaur@example.com", "Keratin Treatment", "Phone Call", "HIGH", "INTERESTED", "6000", "2026-03-26", "Asked about chemical-free keratin options"]
-    ];
+        ["Pooja Sharma", "919876543210", "pooja.sharma@example.com", "Hair Spa", "Instagram", "HIGH", "NEW", "2500", "2026-03-25", "Interested in bridal package inquiry"],
+        ["Rahul Verma", "919812345678", "rahul.v@example.com", "Beard Trim & Styling", "Walk-in", "MEDIUM", "CONTACTED", "800", "2026-03-22", "Followed up via phone call"]
+      ];
 
     sampleRows.forEach((rowValues) => {
       const row = worksheet.addRow(rowValues);
