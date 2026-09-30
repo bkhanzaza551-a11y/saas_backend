@@ -194,7 +194,7 @@ publicRouter.get("/salon/:slug/product/:productId", asyncHandler(async (req, res
   res.json(product);
 }));
 
-// Public order tracking — customer can track order by order number + phone/email
+// Public order & booking tracking — customer can track order/booking by order number
 const handleTrackOrder = asyncHandler(async (req, res) => {
   let salon = await prisma.salon.findUnique({ where: { slug: req.params.slug }, select: { id: true } });
   if (!salon) {
@@ -202,40 +202,90 @@ const handleTrackOrder = asyncHandler(async (req, res) => {
     if (custom) salon = await prisma.salon.findUnique({ where: { id: custom.salonId }, select: { id: true } });
   }
   if (!salon) return res.status(404).json({ message: "Salon not found" });
-  const { orderNumber, phone, email } = req.query;
-  if (!orderNumber) return res.status(400).json({ message: "Order number is required" });
-  const where = { salonId: salon.id, orderNumber: String(orderNumber) };
-  if (phone) where.customerPhone = String(phone);
-  if (email) where.customerEmail = String(email);
+
+  const num = req.query.orderNumber || req.query.bookingNumber;
+  const { phone, email } = req.query;
+  if (!num) return res.status(400).json({ message: "Order or booking number is required" });
+
+  const numStr = String(num);
+
+  // 1. Check onlineOrder
+  const whereOrder = { salonId: salon.id, orderNumber: numStr };
+  if (phone) whereOrder.customerPhone = String(phone);
+  if (email) whereOrder.customerEmail = String(email);
   const order = await prisma.onlineOrder.findFirst({
-    where,
+    where: whereOrder,
     include: {
       items: { include: { product: true } },
       logs: { orderBy: { createdAt: "asc" } }
     }
   });
-  if (!order) return res.status(404).json({ message: "Order not found. Please check your order number and contact details." });
-  res.json({
-    orderNumber: order.orderNumber,
-    status: order.status,
-    paymentStatus: order.paymentStatus,
-    paymentMode: order.paymentMode,
-    fulfillmentMethod: order.fulfillmentMethod,
-    total: order.total,
-    createdAt: order.createdAt,
-    completedAt: order.completedAt,
-    items: order.items.map(i => ({
-      name: i.product?.name || i.productName,
-      qty: i.qty,
-      unitPrice: i.unitPrice,
-      lineTotal: i.lineTotal
-    })),
-    timeline: order.logs.map(l => ({
-      status: l.toStatus,
-      note: l.note,
-      createdAt: l.createdAt
-    }))
+
+  if (order) {
+    return res.json({
+      orderNumber: order.orderNumber,
+      status: order.status,
+      paymentStatus: order.paymentStatus,
+      paymentMode: order.paymentMode,
+      fulfillmentMethod: order.fulfillmentMethod,
+      total: order.total,
+      createdAt: order.createdAt,
+      completedAt: order.completedAt,
+      items: order.items.map(i => ({
+        name: i.product?.name || i.productName,
+        qty: i.qty,
+        unitPrice: i.unitPrice,
+        lineTotal: i.lineTotal
+      })),
+      timeline: order.logs.map(l => ({
+        status: l.toStatus,
+        note: l.note,
+        createdAt: l.createdAt
+      }))
+    });
+  }
+
+  // 2. Check appointment (booking)
+  const appt = await prisma.appointment.findFirst({
+    where: {
+      salonId: salon.id,
+      OR: [
+        { id: numStr },
+        { notes: { contains: numStr } }
+      ]
+    },
+    include: {
+      items: { include: { service: true } },
+      customer: true,
+      branch: true
+    }
   });
+
+  if (appt) {
+    const firstItem = appt.items?.[0];
+    return res.json({
+      booking: {
+        id: appt.id,
+        orderNumber: numStr,
+        status: appt.status,
+        startAt: appt.startAt,
+        endAt: appt.endAt,
+        notes: appt.notes,
+        createdAt: appt.createdAt,
+        customerName: appt.customer?.name || "Guest",
+        customerPhone: appt.customer?.phone || "",
+        branchName: appt.branch?.name || "",
+        serviceInfo: {
+          serviceName: firstItem?.service?.name || "Service",
+          price: firstItem?.service?.price || 0,
+          preferredDate: appt.startAt ? appt.startAt.toISOString().split("T")[0] : "",
+          preferredTime: appt.startAt ? appt.startAt.toISOString().split("T")[1].slice(0, 5) : ""
+        }
+      }
+    });
+  }
+
+  return res.status(404).json({ message: "Order or booking not found." });
 });
 publicRouter.get("/salon/:slug/track-order", handleTrackOrder);
 publicRouter.get("/salons/:slug/track-order", handleTrackOrder);
