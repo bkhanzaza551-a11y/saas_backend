@@ -1,3 +1,4 @@
+import { validateCouponForContext } from "../../lib/phase4.js";
 import { createOnlineOrder, createPublicAppointment, ensurePublicStoreEnabled, getPublicCatalogData, resolvePublicSalonBySlug, trackCatalogEvent, validateCartAgainstStock } from "../../lib/phase3.js";
 import { attemptCustomerTemplateEmail } from "../../lib/emailNotifications.js";
 import { sendOrderConfirmationEmail } from "../../lib/orderEmail.js";
@@ -51,6 +52,24 @@ export const registerPublicPhase3Routes = (publicRouter) => {
       appointment: appointment,
       message: "Booking confirmed successfully!"
     });
+  }));
+  publicRouter.post('/salons/:slug/coupons/validate', asyncHandler(async (req, res) => {
+    const { salon } = await resolvePublicSalonBySlug(req.params.slug);
+    await ensurePublicStoreEnabled(salon.id);
+    const { code, subtotal, serviceIds, productIds } = req.body;
+    if (!code) return res.status(400).json({ valid: false, message: 'Coupon code required' });
+    try {
+      const { discountAmount } = await validateCouponForContext({
+         salonId: salon.id,
+         code,
+         subtotal: Number(subtotal) || 0,
+         serviceIds: serviceIds || [],
+         productIds: productIds || []
+      });
+      res.json({ valid: true, discountAmount, message: 'Coupon applied successfully' });
+    } catch(err) {
+      res.json({ valid: false, message: err.message || 'Invalid coupon code' });
+    }
   }));
   publicRouter.post("/salons/:slug/cart/validate", validate(schemas.cartValidate), asyncHandler(async (req, res) => {
     const { salon } = await resolvePublicSalonBySlug(req.params.slug);
