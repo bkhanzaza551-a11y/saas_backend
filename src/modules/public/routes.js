@@ -812,6 +812,8 @@ const handleCreateBooking = asyncHandler(async (req, res) => {
 });
 publicRouter.post("/salon/:slug/service-bookings", handleCreateBooking);
 publicRouter.post("/salons/:slug/service-bookings", handleCreateBooking);
+publicRouter.post("/salon/:slug/book", handleCreateBooking);
+publicRouter.post("/salons/:slug/book", handleCreateBooking);
 
 // 5. Customer My-Bookings & Cancel
 const handleMyBookings = asyncHandler(async (req, res) => {
@@ -828,7 +830,27 @@ const handleMyBookings = asyncHandler(async (req, res) => {
     orderBy: { startAt: "desc" },
     take: 20
   });
-  res.json(appts);
+
+  const formattedAppts = appts.map(appt => {
+    let orderNum = appt.id;
+    if (appt.notes && appt.notes.includes('BK-')) {
+      const match = appt.notes.match(/(BK-[0-9]+)/);
+      if (match) orderNum = match[1];
+    }
+    
+    let total = Number(appt.totalAmount || 0);
+    if (total === 0 && appt.items) {
+      total = appt.items.reduce((sum, item) => sum + Number(item.service?.price || 0), 0);
+    }
+    
+    return {
+      ...appt,
+      orderNumber: orderNum,
+      totalAmount: total
+    };
+  });
+
+  res.json(formattedAppts);
 });
 publicRouter.get("/salon/:slug/my-bookings", handleMyBookings);
 publicRouter.get("/salons/:slug/my-bookings", handleMyBookings);
