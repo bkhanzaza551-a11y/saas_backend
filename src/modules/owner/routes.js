@@ -1092,7 +1092,7 @@ ownerRouter.get("/service-categories", requireSalonPermission("services", "view"
   // Backfill legacy unassigned services to the primary branch of the salon if any exist
   const defaultBranch = await prisma.branch.findFirst({
     where: { salonId: req.salonId, isActive: true },
-    orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }]
+    orderBy: { createdAt: "asc" }
   });
   if (defaultBranch) {
     await prisma.service.updateMany({
@@ -1122,7 +1122,7 @@ ownerRouter.post("/service-categories", requireSalonPermission("services", "crea
   if (!branchId) {
     const defaultBranch = await prisma.branch.findFirst({
       where: { salonId: req.salonId, isActive: true },
-      orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }]
+      orderBy: { createdAt: "asc" }
     });
     if (defaultBranch) branchId = defaultBranch.id;
   }
@@ -1152,7 +1152,7 @@ ownerRouter.get("/services", requireSalonPermission("services", "view"), async (
   // Backfill legacy unassigned services to the primary branch if any exist
   const defaultBranch = await prisma.branch.findFirst({
     where: { salonId: req.salonId, isActive: true },
-    orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }]
+    orderBy: { createdAt: "asc" }
   });
   if (defaultBranch) {
     await prisma.service.updateMany({
@@ -1172,7 +1172,7 @@ ownerRouter.post("/services", requireSalonPermission("services", "create"), vali
   if (!branchId) {
     const defaultBranch = await prisma.branch.findFirst({
       where: { salonId: req.salonId, isActive: true },
-      orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }]
+      orderBy: { createdAt: "asc" }
     });
     if (defaultBranch) branchId = defaultBranch.id;
   }

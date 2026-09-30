@@ -813,7 +813,7 @@ const handleCreateBooking = asyncHandler(async (req, res) => {
   
   const defaultBranch = await prisma.branch.findFirst({
     where: { salonId: salon.id, isActive: true },
-    orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }]
+    orderBy: { createdAt: "asc" }
   });
   const branchId = reqBranchId || defaultBranch?.id;
   if (!branchId) return res.status(400).json({ message: "No active branch found for booking" });
