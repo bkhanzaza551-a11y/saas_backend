@@ -37,9 +37,7 @@ publicRouter.get("/salon/:slug", asyncHandler(async (req, res) => {
   let salon = await prisma.salon.findUnique({ 
     where: { slug: req.params.slug },
     include: {
-      catalogSettings: true,
-      ecommerceSettings: true,
-      settings: { where: { branchId: null }, take: 1 }
+      catalogSettings: true, ecommerceSettings: true, settings: { where: { branchId: null }, take: 1 }, branches: { where: { isActive: true }, orderBy: { createdAt: "asc" } }, branches: { where: { isActive: true }, orderBy: { createdAt: "asc" } }
     }
   });
   if (!salon) {
@@ -51,9 +49,7 @@ publicRouter.get("/salon/:slug", asyncHandler(async (req, res) => {
       salon = await prisma.salon.findUnique({
         where: { id: customSlugSetting.salonId },
         include: {
-          catalogSettings: true,
-          ecommerceSettings: true,
-          settings: { where: { branchId: null }, take: 1 }
+          catalogSettings: true, ecommerceSettings: true, settings: { where: { branchId: null }, take: 1 }, branches: { where: { isActive: true }, orderBy: { createdAt: "asc" } }, branches: { where: { isActive: true }, orderBy: { createdAt: "asc" } }
         }
       });
     }
@@ -793,3 +789,5 @@ const handleCancelBooking = asyncHandler(async (req, res) => {
 });
 publicRouter.patch("/salon/:slug/my-bookings/:orderNumber/cancel", handleCancelBooking);
 publicRouter.patch("/salons/:slug/my-bookings/:orderNumber/cancel", handleCancelBooking);
+
+
