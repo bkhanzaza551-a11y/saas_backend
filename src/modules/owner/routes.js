@@ -1088,14 +1088,44 @@ ownerRouter.post("/service-categories/import", requireSalonPermission("services"
 
 ownerRouter.get("/service-categories", requireSalonPermission("services", "view"), async (req, res) => {
   const branchId = normalizeBranchId(req.query.branchId);
-  const svcWhere = { isActive: true, ...(branchId ? { OR: [{ branchId }, { branchId: null }] } : {}) };
-  const catWhere = { salonId: req.salonId, isActive: true, parentId: null, ...(branchId ? { OR: [{ branchId }, { branchId: null }] } : {}) };
+
+  // Backfill legacy unassigned services to the primary branch of the salon if any exist
+  const defaultBranch = await prisma.branch.findFirst({
+    where: { salonId: req.salonId, isActive: true },
+    orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }]
+  });
+  if (defaultBranch) {
+    await prisma.service.updateMany({
+      where: { salonId: req.salonId, branchId: null },
+      data: { branchId: defaultBranch.id }
+    });
+  }
+
+  const svcWhere = { isActive: true, ...(branchId ? { branchId } : {}) };
+  const catWhere = { salonId: req.salonId, isActive: true, parentId: null };
   const svcInclude = { consumables: { include: { product: true } } };
-  res.json(await prisma.serviceCategory.findMany({ where: catWhere, include: { children: { where: { isActive: true, ...(branchId ? { OR: [{ branchId }, { branchId: null }] } : {}) }, include: { services: { where: svcWhere, include: svcInclude } } }, services: { where: svcWhere, include: svcInclude }, }, orderBy: { createdAt: "desc" } }));
+  res.json(await prisma.serviceCategory.findMany({
+    where: catWhere,
+    include: {
+      children: {
+        where: { isActive: true },
+        include: { services: { where: svcWhere, include: svcInclude } }
+      },
+      services: { where: svcWhere, include: svcInclude },
+    },
+    orderBy: { createdAt: "desc" }
+  }));
 });
 ownerRouter.post("/service-categories", requireSalonPermission("services", "create"), async (req, res) => {
   const { name, parentId } = req.body;
-  const branchId = normalizeBranchId(req.body.branchId);
+  let branchId = normalizeBranchId(req.body.branchId || req.query.branchId);
+  if (!branchId) {
+    const defaultBranch = await prisma.branch.findFirst({
+      where: { salonId: req.salonId, isActive: true },
+      orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }]
+    });
+    if (defaultBranch) branchId = defaultBranch.id;
+  }
   if (branchId) await ensureBranch(req.salonId, branchId);
   if (!name || name.length < 2) return res.status(400).json({ message: "Name must be at least 2 characters" });
   const where = { salonId: req.salonId, name: name.trim(), isActive: true, parentId: parentId || null };
@@ -1118,14 +1148,34 @@ ownerRouter.patch("/service-categories/:id/archive", requireSalonPermission("ser
 
 ownerRouter.get("/services", requireSalonPermission("services", "view"), async (req, res) => {
   const branchId = normalizeBranchId(req.query.branchId);
+
+  // Backfill legacy unassigned services to the primary branch if any exist
+  const defaultBranch = await prisma.branch.findFirst({
+    where: { salonId: req.salonId, isActive: true },
+    orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }]
+  });
+  if (defaultBranch) {
+    await prisma.service.updateMany({
+      where: { salonId: req.salonId, branchId: null },
+      data: { branchId: defaultBranch.id }
+    });
+  }
+
   res.json(await prisma.service.findMany({
-    where: { salonId: req.salonId, isActive: true, ...(branchId ? { OR: [{ branchId }, { branchId: null }] } : {}) },
+    where: { salonId: req.salonId, isActive: true, ...(branchId ? { branchId } : {}) },
     include: { branch: true, category: true, consumables: { include: { product: true } }, taxes: true },
     orderBy: [{ position: "asc" }, { createdAt: "desc" }]
   }));
 });
 ownerRouter.post("/services", requireSalonPermission("services", "create"), validate(schemas.service), async (req, res) => {
-  const branchId = normalizeBranchId(req.body.branchId);
+  let branchId = normalizeBranchId(req.body.branchId || req.query.branchId);
+  if (!branchId) {
+    const defaultBranch = await prisma.branch.findFirst({
+      where: { salonId: req.salonId, isActive: true },
+      orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }]
+    });
+    if (defaultBranch) branchId = defaultBranch.id;
+  }
   if (branchId) await ensureBranch(req.salonId, branchId);
   const categoryId = req.body.categoryId || null;
   const taxRows = await prisma.taxRate.findMany({ where: { salonId: req.salonId, active: true } });
