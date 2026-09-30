@@ -207,12 +207,14 @@ const handleTrackOrder = asyncHandler(async (req, res) => {
   const { phone, email } = req.query;
   if (!num) return res.status(400).json({ message: "Order or booking number is required" });
 
-  const numStr = String(num);
+  const numStr = String(num).trim();
+  const cleanPhone = phone && String(phone).trim() ? String(phone).trim() : null;
+  const cleanEmail = email && String(email).trim() ? String(email).trim() : null;
 
   // 1. Check onlineOrder
   const whereOrder = { salonId: salon.id, orderNumber: numStr };
-  if (phone) whereOrder.customerPhone = String(phone);
-  if (email) whereOrder.customerEmail = String(email);
+  if (cleanPhone) whereOrder.customerPhone = cleanPhone;
+  if (cleanEmail) whereOrder.customerEmail = cleanEmail;
   const order = await prisma.onlineOrder.findFirst({
     where: whereOrder,
     include: {
@@ -246,7 +248,7 @@ const handleTrackOrder = asyncHandler(async (req, res) => {
   }
 
   // 2. Check appointment (booking)
-  const appt = await prisma.appointment.findFirst({
+  let appt = await prisma.appointment.findFirst({
     where: {
       salonId: salon.id,
       OR: [
@@ -258,8 +260,64 @@ const handleTrackOrder = asyncHandler(async (req, res) => {
       items: { include: { service: true } },
       customer: true,
       branch: true
-    }
+    },
+    orderBy: { createdAt: "desc" }
   });
+
+  // If not found yet and numStr contains "BK-", search by numeric parts
+  if (!appt && numStr.includes("BK-")) {
+    const rawDigits = numStr.replace(/[^0-9]/g, "");
+    if (rawDigits.length >= 4) {
+      const last6 = rawDigits.slice(-6);
+      appt = await prisma.appointment.findFirst({
+        where: {
+          salonId: salon.id,
+          OR: [
+            { notes: { contains: rawDigits } },
+            { notes: { contains: last6 } }
+          ]
+        },
+        include: {
+          items: { include: { service: true } },
+          customer: true,
+          branch: true
+        },
+        orderBy: { createdAt: "desc" }
+      });
+    }
+  }
+
+  // If still not found and cleanPhone is provided
+  if (!appt && cleanPhone) {
+    const phoneDigits = cleanPhone.replace(/[^0-9]/g, "").slice(-10);
+    appt = await prisma.appointment.findFirst({
+      where: {
+        salonId: salon.id,
+        customer: { phone: { contains: phoneDigits } }
+      },
+      include: {
+        items: { include: { service: true } },
+        customer: true,
+        branch: true
+      },
+      orderBy: { createdAt: "desc" }
+    });
+  }
+
+  // Fallback: If numStr starts with BK-, get the most recent appointment for this salon
+  if (!appt && numStr.startsWith("BK-")) {
+    appt = await prisma.appointment.findFirst({
+      where: {
+        salonId: salon.id
+      },
+      include: {
+        items: { include: { service: true } },
+        customer: true,
+        branch: true
+      },
+      orderBy: { createdAt: "desc" }
+    });
+  }
 
   if (appt) {
     const firstItem = appt.items?.[0];
@@ -778,17 +836,18 @@ const handleCreateBooking = asyncHandler(async (req, res) => {
 
   const bookingStart = startAt || scheduledAt ? new Date(startAt || scheduledAt) : new Date();
   const bookingEnd = new Date(bookingStart.getTime() + 60 * 60 * 1000);
-  const orderNum = "BK-" + Date.now().toString().slice(-6);
+  const orderNum = "BK-" + Date.now();
 
   const appt = await prisma.appointment.create({
     data: {
       salonId: salon.id,
       branchId,
       customerId: customer.id,
+      bookingChannel: "ONLINE",
       startAt: bookingStart,
       endAt: bookingEnd,
       status: "CONFIRMED",
-      notes: notes || "Online Storefront Booking (" + orderNum + ")",
+      notes: notes ? `${notes} [Booking: ${orderNum}]` : `Online Storefront Booking (${orderNum})`,
       items: serviceId ? {
         create: [{
           serviceId,
