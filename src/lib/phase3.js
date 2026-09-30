@@ -277,6 +277,7 @@ export const createPublicAppointment = async ({ slug, body }) => {
       });
     }
 
+    const orderNum = "BK-" + Date.now();
     const appointment = await tx.appointment.create({
       data: {
         salonId: salon.id,
@@ -288,7 +289,7 @@ export const createPublicAppointment = async ({ slug, body }) => {
         status: "PENDING",
         startAt: new Date(body.startAt),
         endAt: new Date(body.endAt),
-        notes: body.notes || null,
+        notes: body.notes ? `${body.notes} [Booking: ${orderNum}]` : `Online Storefront Booking (${orderNum})`,
         customerPreferences: body.customerPreferences || null,
         approvalStatus: "APPROVED",
         isWalkIn: false,

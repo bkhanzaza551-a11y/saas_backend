@@ -43,7 +43,14 @@ export const registerPublicPhase3Routes = (publicRouter) => {
         customerId: appointment.customerId
       }
     });
-    res.status(201).json(appointment);
+    const orderNumberMatch = appointment.notes ? appointment.notes.match(/(BK-[0-9]+)/) : null;
+    const orderNumber = orderNumberMatch ? orderNumberMatch[1] : `BK-${Date.now()}`;
+    res.status(201).json({
+      success: true,
+      orderNumber: orderNumber,
+      appointment: appointment,
+      message: "Booking confirmed successfully!"
+    });
   }));
   publicRouter.post("/salons/:slug/cart/validate", validate(schemas.cartValidate), asyncHandler(async (req, res) => {
     const { salon } = await resolvePublicSalonBySlug(req.params.slug);
