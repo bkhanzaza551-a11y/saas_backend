@@ -196,46 +196,51 @@ export const registerMissingOwnerRoutes = (ownerRouter) => {
   });
 
   // 6. WhatsApp Credits Purchase
+  // 6. Communication Credits (WhatsApp & SMS) Purchase & Verification
+  const defaultCreditPackages = [
+    { id: "pkg-wa-1000", name: "Starter WhatsApp", type: "WHATSAPP", credits: 1000, price: 999 },
+    { id: "pkg-wa-5000", name: "Growth WhatsApp", type: "WHATSAPP", credits: 5000, price: 3999 },
+    { id: "pkg-wa-10000", name: "Enterprise WhatsApp", type: "WHATSAPP", credits: 10000, price: 6999 },
+    { id: "pkg-sms-1000", name: "Basic SMS", type: "SMS", credits: 1000, price: 499 },
+    { id: "pkg-sms-5000", name: "Pro SMS", type: "SMS", credits: 5000, price: 1999 },
+    { id: "pkg-sms-10000", name: "Bulk SMS", type: "SMS", credits: 10000, price: 3499 },
+    { id: "wa_starter", name: "Starter WhatsApp", type: "WHATSAPP", credits: 1000, price: 499 },
+    { id: "wa_growth", name: "Growth WhatsApp", type: "WHATSAPP", credits: 5000, price: 1999 },
+    { id: "wa_volume", name: "Enterprise WhatsApp", type: "WHATSAPP", credits: 10000, price: 3499 },
+    { id: "sms_starter", name: "Basic SMS", type: "SMS", credits: 1000, price: 299 },
+    { id: "sms_growth", name: "Pro SMS", type: "SMS", credits: 5000, price: 999 },
+    { id: "sms_volume", name: "Bulk SMS", type: "SMS", credits: 10000, price: 1999 }
+  ];
+
   ownerRouter.post("/credits/create-order", async (req, res) => {
     try {
       const { packageId } = req.body;
-      
-      const whatsappPackages = [
-        { id: 'wa_starter', amount: 499 },
-        { id: 'wa_growth', amount: 1999 },
-        { id: 'wa_volume', amount: 3499 }
-      ];
-      const smsPackages = [
-        { id: 'sms_starter', amount: 299 },
-        { id: 'sms_growth', amount: 999 },
-        { id: 'sms_volume', amount: 1999 }
-      ];
-      
-      let pkg = whatsappPackages.find(p => p.id === packageId) || smsPackages.find(p => p.id === packageId);
-      if (!pkg && req.body.amount) {
-        pkg = { id: 'custom', amount: req.body.amount };
-      }
-      
+      const gs = await prisma.globalSetting.findFirst();
+      const defs = gs?.notificationDefaults || {};
+      const allPkgs = [...(defs.creditPackages || []), ...defaultCreditPackages];
+      let pkg = allPkgs.find(p => p.id === packageId);
+      const pkgAmount = Number(pkg?.price || pkg?.amount || req.body.amount || 500);
+
       const keyId = process.env.RAZORPAY_KEY_ID;
       const keySecret = process.env.RAZORPAY_SECRET_KEY;
       if (!keyId || !keySecret) {
         return res.json({
           success: true,
-          orderId: `order_cred_${Date.now()}`,
-          amount: Number(pkg?.amount || 500) * 100,
+          orderId: "order_cred_" + Date.now(),
+          amount: Math.round(pkgAmount * 100),
           currency: "INR",
           key: "rzp_test_mock"
         });
       }
 
-      const authHeader = `Basic ${Buffer.from(`${keyId}:${keySecret}`).toString("base64")}`;
+      const authHeader = "Basic " + Buffer.from(keyId + ":" + keySecret).toString("base64");
       const response = await fetch("https://api.razorpay.com/v1/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": authHeader },
         body: JSON.stringify({
-          amount: Math.round(Number(pkg?.amount || req.body.amount || 500) * 100),
+          amount: Math.round(pkgAmount * 100),
           currency: "INR",
-          receipt: `cred_${Date.now()}`
+          receipt: "cred_" + Date.now()
         })
       });
 
@@ -253,12 +258,83 @@ export const registerMissingOwnerRoutes = (ownerRouter) => {
         key: keyId
       });
     } catch (e) {
+      console.error("[credits/create-order] Error:", e);
       res.status(500).json({ message: "Failed to create credits recharge order" });
     }
   });
 
   ownerRouter.post("/credits/verify-payment", async (req, res) => {
-    res.json({ success: true, message: "Payment verified and credits added to your wallet!" });
+    try {
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature, packageId } = req.body;
+
+      const keySecret = process.env.RAZORPAY_SECRET_KEY;
+      if (keySecret && razorpay_order_id && razorpay_payment_id && razorpay_signature) {
+        const { default: crypto } = await import("node:crypto");
+        const generated_signature = crypto
+          .createHmac("sha256", keySecret)
+          .update(razorpay_order_id + "|" + razorpay_payment_id)
+          .digest("hex");
+        if (generated_signature !== razorpay_signature) {
+          return res.status(400).json({ message: "Invalid payment signature" });
+        }
+      }
+
+      const gs = await prisma.globalSetting.findFirst();
+      const defs = gs?.notificationDefaults || {};
+      const allPkgs = [...(defs.creditPackages || []), ...defaultCreditPackages];
+      const pkg = allPkgs.find(p => p.id === packageId) || { credits: 1000, type: "WHATSAPP", name: "Credits Top-Up", price: 500 };
+
+      const creditType = String(pkg.type || "WHATSAPP").toUpperCase();
+      const creditsToAdd = Number(pkg.credits || 1000);
+      const key = creditType === "SMS" ? "smsCredits" : "whatsappCredits";
+
+      let setting = await prisma.salonSetting.findFirst({ where: { salonId: req.salonId, branchId: null } });
+      if (!setting) {
+        setting = await prisma.salonSetting.findFirst({ where: { salonId: req.salonId } });
+      }
+      const adv = setting?.advancedSettings || {};
+      const currentCredits = Number(adv[key] || 0);
+      const newCredits = currentCredits + creditsToAdd;
+      adv[key] = newCredits;
+
+      if (setting) {
+        await prisma.salonSetting.update({
+          where: { id: setting.id },
+          data: { advancedSettings: adv }
+        });
+      } else {
+        await prisma.salonSetting.create({
+          data: { salonId: req.salonId, advancedSettings: adv }
+        });
+      }
+
+      await prisma.auditLog.create({
+        data: {
+          salonId: req.salonId,
+          module: "CREDITS",
+          action: "CREDIT_PURCHASE",
+          metadata: {
+            packageName: pkg.name || (creditsToAdd + " Credits"),
+            credits: creditsToAdd,
+            creditsToAdd: creditsToAdd,
+            amount: Number(pkg.price || pkg.amount || 0),
+            creditType: creditType,
+            paymentId: razorpay_payment_id || null,
+            orderId: razorpay_order_id || null
+          }
+        }
+      });
+
+      res.json({
+        success: true,
+        message: "Payment verified! " + creditsToAdd + " " + creditType + " credits added to your wallet.",
+        whatsappCredits: Number(adv.whatsappCredits || 0),
+        smsCredits: Number(adv.smsCredits || 0)
+      });
+    } catch (e) {
+      console.error("[credits/verify-payment] Error:", e);
+      res.status(500).json({ message: "Failed to verify payment: " + e.message });
+    }
   });
 
   // 7. Staff Schedule & Availability Grid
