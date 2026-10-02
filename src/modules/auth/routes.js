@@ -263,7 +263,7 @@ authRouter.post("/login", validate(schemas.login), async (req, res) => {
   }).catch(e => console.error("OTP Email failed", e));
 
   // Also send OTP to SMS if phone is available
-  const targetPhone = user.memberships?.find(m => m.phone)?.phone || null;
+  const targetPhone = user.memberships?.find(m => m.phone && m.phone !== "null" && String(m.phone).trim().length >= 10)?.phone || null;
   const targetSalonId = user.memberships?.[0]?.salonId || null;
   if (targetPhone) {
     sendSms({
@@ -341,7 +341,10 @@ authRouter.post("/resend-otp", async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ message: "Email is required" });
   const cleanEmail = String(email).trim().toLowerCase();
-  const user = await prisma.user.findFirst({ where: { email: { equals: cleanEmail, mode: "insensitive" } } });
+  const user = await prisma.user.findFirst({
+    where: { email: { equals: cleanEmail, mode: "insensitive" } },
+    include: { memberships: true }
+  });
   if (!user) return res.status(400).json({ message: "Invalid request" });
 
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -358,6 +361,17 @@ authRouter.post("/resend-otp", async (req, res) => {
     text: `Your OTP for login is ${otp}. It is valid for 10 minutes.`,
     html: `<p>Your OTP for login is <strong>${otp}</strong>.</p><p>It is valid for 10 minutes.</p>`
   }).catch(e => console.error("OTP Email failed", e));
+
+  // Also send OTP via SMS if phone is available
+  const targetPhone = user.memberships?.find(m => m.phone && m.phone !== "null" && String(m.phone).trim().length >= 10)?.phone || null;
+  const targetSalonId = user.memberships?.[0]?.salonId || null;
+  if (targetPhone) {
+    sendSms({
+      salonId: targetSalonId,
+      to: targetPhone,
+      message: `Your SalonNest verification OTP is ${otp}.`
+    }).catch(e => console.error("Resend OTP SMS failed", e));
+  }
 
   return res.json({
     success: true,
