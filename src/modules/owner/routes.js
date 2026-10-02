@@ -928,7 +928,9 @@ ownerRouter.post("/service-categories/import", requireSalonPermission("services"
   const commIdx = findHeaderIdx("commissionpct", "commission");
   const genderIdx = findHeaderIdx("gender");
   const descIdx = findHeaderIdx("description", "desc");
-  const onlineIdx = findHeaderIdx("onlinebooking", "online");
+  const onlineIdx = findHeaderIdx("onlinebooking", "online", "onlinebookingenabled");
+  const featIdx = findHeaderIdx("isfeatured", "featured");
+  const popIdx = findHeaderIdx("ispopular", "popular");
 
   if (catIdx === -1 || nameIdx === -1 || priceIdx === -1) {
     return res.status(400).json({ message: "File must contain Category, ServiceName, and Price columns" });
@@ -980,8 +982,41 @@ ownerRouter.post("/service-categories/import", requireSalonPermission("services"
       }
 
       const durationMin = durationIdx !== -1 ? Number(row[durationIdx] || 30) : 30;
-      const taxRate = taxIdx !== -1 ? Number(row[taxIdx] || 0) : null;
-      const commissionPct = commIdx !== -1 ? Number(row[commIdx] || 0) : null;
+      const taxRate = (taxIdx !== -1 && row[taxIdx] !== undefined && row[taxIdx] !== "") ? Number(row[taxIdx] || 0) : null;
+      const commissionPct = (commIdx !== -1 && row[commIdx] !== undefined && row[commIdx] !== "") ? Number(row[commIdx] || 0) : null;
+
+      // Online booking: DEFAULT TO TRUE on imported services unless explicitly set to false/no/0/disabled
+      let isOnlineBooking = true;
+      if (onlineIdx !== -1 && row[onlineIdx] !== undefined && row[onlineIdx] !== null && String(row[onlineIdx]).trim() !== "") {
+        const val = String(row[onlineIdx]).trim().toLowerCase();
+        if (val === "false" || val === "no" || val === "0" || val === "disabled" || val === "n" || val === "off") {
+          isOnlineBooking = false;
+        } else {
+          isOnlineBooking = true;
+        }
+      }
+
+      // Featured flag
+      let isFeatured = false;
+      if (featIdx !== -1 && row[featIdx] !== undefined && row[featIdx] !== null && String(row[featIdx]).trim() !== "") {
+        const val = String(row[featIdx]).trim().toLowerCase();
+        if (val === "true" || val === "yes" || val === "1" || val === "y") {
+          isFeatured = true;
+        }
+      }
+
+      // Popular flag
+      let isPopular = false;
+      if (popIdx !== -1 && row[popIdx] !== undefined && row[popIdx] !== null && String(row[popIdx]).trim() !== "") {
+        const val = String(row[popIdx]).trim().toLowerCase();
+        if (val === "true" || val === "yes" || val === "1" || val === "y") {
+          isPopular = true;
+        }
+      }
+
+      const genderRaw = (genderIdx !== -1 && row[genderIdx]) ? String(row[genderIdx]).trim().toUpperCase() : "UNISEX";
+      const validGender = ["MALE", "FEMALE", "UNISEX", "KIDS"].includes(genderRaw) ? genderRaw : "UNISEX";
+      const descVal = (descIdx !== -1 && row[descIdx]) ? String(row[descIdx]).trim() : null;
 
       const existingService = await prisma.service.findFirst({
         where: { salonId: req.salonId, name: serviceName, categoryId: targetCategoryId, isActive: true }
@@ -994,7 +1029,14 @@ ownerRouter.post("/service-categories/import", requireSalonPermission("services"
             price,
             durationMin,
             taxRate,
-            commissionPct
+            commissionPct,
+            onlineBookingEnabled: isOnlineBooking,
+            isPublicVisible: true,
+            isActive: true,
+            gender: validGender,
+            ...(descVal !== null ? { description: descVal } : {}),
+            ...(featIdx !== -1 ? { isFeatured } : {}),
+            ...(popIdx !== -1 ? { isPopular } : {})
           }
         });
       } else {
@@ -1007,6 +1049,13 @@ ownerRouter.post("/service-categories/import", requireSalonPermission("services"
             durationMin,
             taxRate,
             commissionPct,
+            onlineBookingEnabled: isOnlineBooking,
+            isPublicVisible: true,
+            isActive: true,
+            gender: validGender,
+            isFeatured,
+            isPopular,
+            description: descVal,
             branchId: req.body.branchId || null
           }
         });
