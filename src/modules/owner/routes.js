@@ -2656,14 +2656,18 @@ ownerRouter.post("/settings", requireSalonPermission("settings", "edit"), valida
 ownerRouter.get("/website/config", requireSalonPermission("settings", "view"), async (req, res) => {
   const salon = await prisma.salon.findUnique({
     where: { id: req.salonId },
-    select: { featureFlags: true }
+    select: { featureFlags: true, name: true, logoUrl: true, phone: true, email: true, address: true, slug: true }
   });
   const featureFlags = typeof salon?.featureFlags === "object" && salon.featureFlags ? salon.featureFlags : {};
   const websiteConfig = typeof featureFlags.websiteConfig === "object" && featureFlags.websiteConfig ? featureFlags.websiteConfig : {};
   res.json({
-    heroTitle: String(websiteConfig.heroTitle || ""),
-    heroSubtitle: String(websiteConfig.heroSubtitle || ""),
-    heroImage: String(websiteConfig.heroImage || "")
+    salonName: salon?.name || "",
+    logoUrl: salon?.logoUrl || "",
+    contactPhone: salon?.phone || "",
+    contactEmail: salon?.email || "",
+    contactAddress: salon?.address || "",
+    slug: salon?.slug || "",
+    ...websiteConfig
   });
 });
 
@@ -2673,17 +2677,17 @@ ownerRouter.post("/website/config", requireSalonPermission("settings", "edit"), 
     select: { featureFlags: true }
   });
   const featureFlags = typeof salon?.featureFlags === "object" && salon.featureFlags ? salon.featureFlags : {};
-  const websiteConfig = {
-    heroTitle: String(req.body.heroTitle || "").trim(),
-    heroSubtitle: String(req.body.heroSubtitle || "").trim(),
-    heroImage: String(req.body.heroImage || "").trim()
+  const currentWebsiteConfig = typeof featureFlags.websiteConfig === "object" && featureFlags.websiteConfig ? featureFlags.websiteConfig : {};
+  const updatedWebsiteConfig = {
+    ...currentWebsiteConfig,
+    ...req.body
   };
   await prisma.salon.update({
     where: { id: req.salonId },
     data: {
       featureFlags: {
         ...featureFlags,
-        websiteConfig
+        websiteConfig: updatedWebsiteConfig
       }
     }
   });
@@ -2696,9 +2700,9 @@ ownerRouter.post("/website/config", requireSalonPermission("settings", "edit"), 
     entityType: "Salon",
     entityId: req.salonId,
     summary: "Website editor configuration updated",
-    metadata: websiteConfig
+    metadata: updatedWebsiteConfig
   });
-  res.json(websiteConfig);
+  res.json(updatedWebsiteConfig);
 });
 
 ownerRouter.get("/reports/trends", requireSalonPermission("reports", "view"), async (req, res) => {
