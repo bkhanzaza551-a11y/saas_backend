@@ -2853,7 +2853,7 @@ ownerRouter.post("/users/send-staff-otp", async (req, res) => {
   const key = `staff_otp:${salonId}:${phone}`;
   phoneOtpStore.set(key, { otpCode, expiresAt: Date.now() + PHONE_OTP_TTL_MS });
 
-  const messageText = `Your login verification code is ${otpCode}. It is valid for 20 minutes. Do not share this code with anyone. Salon Nest`;
+  const messageText = `Your SalonNest verification OTP is ${otpCode}.`;
 
   let delivered = false;
   let channel = "sms";
@@ -2960,7 +2960,7 @@ ownerRouter.post("/verify-phone/send", async (req, res) => {
       let delivered = false;
       try {
         const { sendSms } = await import("../../lib/smsService.js");
-        const smsResult = await sendSms({ salonId: req.user.salonId, to: phone, message: `Your login verification code is ${otpCode}. It is valid for 20 minutes. Do not share this code with anyone. Salon Nest` });
+        const smsResult = await sendSms({ salonId: req.user.salonId, to: phone, message: `Your SalonNest verification OTP is ${otpCode}.` });
         if (!smsResult.success) throw new Error("SMS Failed");
         delivered = true;
         channel = "sms";
