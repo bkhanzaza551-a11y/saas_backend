@@ -811,7 +811,7 @@ const handleCreateBooking = asyncHandler(async (req, res) => {
   const salon = await findPublicSalon(req.params.slug);
   if (!salon) return res.status(404).json({ message: "Salon not found" });
 
-  const { customerName, customerPhone, customerEmail, scheduledAt, startAt, serviceId, notes, paymentMode, branchId: reqBranchId } = req.body;
+  const { customerName, customerPhone, customerEmail, scheduledAt, startAt, serviceId, items, notes, paymentMode, branchId: reqBranchId } = req.body;
   
   const defaultBranch = await prisma.branch.findFirst({
     where: { salonId: salon.id, isActive: true },
@@ -924,3 +924,30 @@ publicRouter.patch("/salon/:slug/my-bookings/:orderNumber/cancel", handleCancelB
 publicRouter.patch("/salons/:slug/my-bookings/:orderNumber/cancel", handleCancelBooking);
 
 
+const handleGetPublicBlogs = asyncHandler(async (req, res) => {
+  const salon = await findPublicSalon(req.params.slug);
+  if (!salon) return res.status(404).json({ message: "Salon not found" });
+  
+  const blogs = await prisma.blog.findMany({
+    where: { salonId: salon.id, published: true },
+    orderBy: { createdAt: "desc" }
+  });
+  res.json(blogs);
+});
+
+const handleGetPublicBlogBySlug = asyncHandler(async (req, res) => {
+  const salon = await findPublicSalon(req.params.slug);
+  if (!salon) return res.status(404).json({ message: "Salon not found" });
+  
+  const blog = await prisma.blog.findFirst({
+    where: { salonId: salon.id, slug: req.params.blogSlug, published: true }
+  });
+  
+  if (!blog) return res.status(404).json({ message: "Blog not found" });
+  res.json(blog);
+});
+
+publicRouter.get("/salon/:slug/blogs", handleGetPublicBlogs);
+publicRouter.get("/salons/:slug/blogs", handleGetPublicBlogs);
+publicRouter.get("/salon/:slug/blogs/:blogSlug", handleGetPublicBlogBySlug);
+publicRouter.get("/salons/:slug/blogs/:blogSlug", handleGetPublicBlogBySlug);

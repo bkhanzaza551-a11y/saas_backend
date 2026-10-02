@@ -95,7 +95,7 @@ const ensurePackagePlan = async (salonId, packageId) => {
   return pack;
 };
 
-const createPaymentRows = async (tx, salonId, invoiceId, payments) => {
+const createPaymentRows = async (tx, salonId, invoiceId, payments, customerId) => {
   if (!payments.length) return [];
   await tx.payment.createMany({
     data: payments.map((payment) => ({
@@ -110,6 +110,39 @@ const createPaymentRows = async (tx, salonId, invoiceId, payments) => {
       gatewayRef: payment.gatewayRef || null
     }))
   });
+
+  const walletPayments = payments.filter((p) => p.mode === "WALLET" && toAmount(p.amount) > 0);
+  if (walletPayments.length > 0 && customerId) {
+    const totalWalletAmount = walletPayments.reduce((sum, p) => sum + toAmount(p.amount), 0);
+    const wallet = await tx.wallet.findUnique({
+      where: { salonId_customerId: { salonId, customerId } }
+    });
+    if (!wallet || Number(wallet.balance) < totalWalletAmount) {
+      const err = new Error(`Insufficient wallet balance. Available: ₹${Number(wallet?.balance || 0).toFixed(2)}, Required: ₹${totalWalletAmount.toFixed(2)}`);
+      err.status = 400;
+      throw err;
+    }
+    const updatedWallet = await tx.wallet.update({
+      where: { id: wallet.id },
+      data: {
+        balance: { decrement: totalWalletAmount },
+        totalUsed: { increment: totalWalletAmount }
+      }
+    });
+    await tx.walletTransaction.create({
+      data: {
+        salonId,
+        walletId: wallet.id,
+        customerId,
+        type: "POS_PAYMENT",
+        amount: totalWalletAmount,
+        balanceAfter: updatedWallet.balance,
+        referenceId: invoiceId,
+        note: `POS invoice payment (${invoiceId})`
+      }
+    });
+  }
+
   return tx.payment.findMany({ where: { invoiceId } });
 };
 
@@ -707,7 +740,7 @@ export const createPosInvoice = async ({ salonId, actorUser, body }) => {
     const isStartMode = body.mode === "start";
 
     if (!isStartMode) {
-    await createPaymentRows(tx, salonId, invoice.id, allPayments.filter(p => p.mode !== "BALANCE"));
+    await createPaymentRows(tx, salonId, invoice.id, allPayments.filter(p => p.mode !== "BALANCE"), body.customerId);
 
     const finalInvoice = await tx.invoice.findUnique({ where: { id: invoice.id } });
     if (finalInvoice && normalizeStatus(toAmount(finalInvoice.paidAmount), toAmount(finalInvoice.total)) === "PAID") {
@@ -1147,6 +1180,42 @@ export const addInvoicePayment = async ({ salonId, invoiceId, amount, mode, note
       error.status = 400;
       throw error;
     }
+    if (mode === "WALLET") {
+      const customerId = invoice.customerId;
+      if (!customerId) {
+        const error = new Error("Cannot pay via wallet for guest checkout");
+        error.status = 400;
+        throw error;
+      }
+      const wallet = await tx.wallet.findUnique({
+        where: { salonId_customerId: { salonId, customerId } }
+      });
+      if (!wallet || Number(wallet.balance) < toAmount(amount)) {
+        const err = new Error(`Insufficient wallet balance. Available: ₹${Number(wallet?.balance || 0).toFixed(2)}, Required: ₹${toAmount(amount).toFixed(2)}`);
+        err.status = 400;
+        throw err;
+      }
+      const updatedWallet = await tx.wallet.update({
+        where: { id: wallet.id },
+        data: {
+          balance: { decrement: toAmount(amount) },
+          totalUsed: { increment: toAmount(amount) }
+        }
+      });
+      await tx.walletTransaction.create({
+        data: {
+          salonId,
+          walletId: wallet.id,
+          customerId,
+          type: "POS_PAYMENT",
+          amount: toAmount(amount),
+          balanceAfter: updatedWallet.balance,
+          referenceId: invoice.id,
+          note: `POS invoice balance payment (${invoice.id})`
+        }
+      });
+    }
+
     const payment = await tx.payment.create({
       data: {
         salonId,

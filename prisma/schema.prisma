@@ -262,7 +262,7 @@ model User {
   pagePermissions          Json?
   loginOtp                 String?
   loginOtpExpiry           DateTime?
-  createdAt             DateTime                     @default(now())
+  createdAt                DateTime             @default(now())
   updatedAt                DateTime             @updatedAt
   memberships              UserSalon[]
   passwordSetupTokens      PasswordSetupToken[]
@@ -364,6 +364,7 @@ model Salon {
   affiliateTransactions AffiliateCreditTransaction[]
   payoutRequests        CreditPayoutRequest[]
   financeTransactions   FinanceTransaction[]
+  blogs                 Blog[]
 }
 
 model UserSalon {
@@ -417,8 +418,8 @@ model UserSalon {
   attendanceRecordedBy           AttendanceRecord[]        @relation("AttendanceRecordedBy")
   attendanceManualEdits          AttendanceRecord[]        @relation("AttendanceManualEditedBy")
   leaveRequests                  LeaveRequest[]            @relation("LeaveRequestedBy")
-   leaveApproved                  LeaveRequest[]            @relation("LeaveApprovedBy")
-   notifications                  Notification[]
+  leaveApproved                  LeaveRequest[]            @relation("LeaveApprovedBy")
+  notifications                  Notification[]
   auditLogs                      AuditLog[]
   campaignTemplates              CampaignTemplate[]        @relation("CampaignTemplateCreatedBy")
   campaignConversions            CampaignConversion[]      @relation("CampaignConversionActor")
@@ -441,7 +442,7 @@ model Plan {
   invoiceLimit  Int            @default(1000)
   storageLimit  Int?
   isCustom      Boolean        @default(false)
-  isArchived  Boolean        @default(false)
+  isArchived    Boolean        @default(false)
   featureFlags  Json?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
@@ -537,11 +538,11 @@ model Branch {
   onlineOrders         OnlineOrder[]
   feedback             CustomerFeedback[]
   enquiries            Enquiry[]
-   expenses             Expense[]
-   attendanceRecords    AttendanceRecord[]
-   serviceCategories    ServiceCategory[]
-   productCategories    ProductCategory[]
-   loyaltyRules         LoyaltyRule[]
+  expenses             Expense[]
+  attendanceRecords    AttendanceRecord[]
+  serviceCategories    ServiceCategory[]
+  productCategories    ProductCategory[]
+  loyaltyRules         LoyaltyRule[]
   coupons              Coupon[]
   packages             Package[]
   shifts               Shift[]
@@ -1493,35 +1494,36 @@ model CustomerCoupon {
 }
 
 model Wallet {
-  id              String              @id @default(cuid())
-  salonId         String
-  customerId      String
-  balance         Decimal             @default(0) @db.Decimal(12, 2)
-  totalDeposited  Decimal             @default(0) @db.Decimal(12, 2)
-  totalUsed       Decimal             @default(0) @db.Decimal(12, 2)
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
-  salon           Salon               @relation(fields: [salonId], references: [id])
-  customer        Customer            @relation(fields: [customerId], references: [id])
-  transactions    WalletTransaction[]
+  id             String              @id @default(cuid())
+  salonId        String
+  customerId     String
+  balance        Decimal             @default(0) @db.Decimal(12, 2)
+  totalDeposited Decimal             @default(0) @db.Decimal(12, 2)
+  totalUsed      Decimal             @default(0) @db.Decimal(12, 2)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  salon          Salon               @relation(fields: [salonId], references: [id])
+  customer       Customer            @relation(fields: [customerId], references: [id])
+  transactions   WalletTransaction[]
+
   @@unique([salonId, customerId])
 }
 
 model WalletTransaction {
-  id           String   @id @default(cuid())
-  salonId      String
-  walletId     String
-  customerId   String
-  type         String
-  amount       Decimal  @db.Decimal(12, 2)
-  balanceAfter Decimal  @db.Decimal(12, 2)
-  referenceId  String?
-  note         String?
+  id              String   @id @default(cuid())
+  salonId         String
+  walletId        String
+  customerId      String
+  type            String
+  amount          Decimal  @db.Decimal(12, 2)
+  balanceAfter    Decimal  @db.Decimal(12, 2)
+  referenceId     String?
+  note            String?
   createdByUserId String?
-  createdAt    DateTime @default(now())
-  salon        Salon    @relation(fields: [salonId], references: [id])
-  wallet       Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
-  customer     Customer @relation(fields: [customerId], references: [id])
+  createdAt       DateTime @default(now())
+  salon           Salon    @relation(fields: [salonId], references: [id])
+  wallet          Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  customer        Customer @relation(fields: [customerId], references: [id])
 }
 
 model CustomerNotification {
@@ -2394,27 +2396,27 @@ model StaffRequirement {
 }
 
 model ProductRequirement {
-  id          String   @id @default(cuid())
-  salonId     String?
-  branchId    String?
-  productName String
-  description String?
-  category    String?
-  quantity    Int      @default(1)
-  unitPrice   Float?
-  priority    String   @default("MEDIUM")
-  status      String   @default("OPEN")
-  vendor      String?
-  brand       String?
-  packSize    String?
-  availableQty Int     @default(0)
+  id           String   @id @default(cuid())
+  salonId      String?
+  branchId     String?
+  productName  String
+  description  String?
+  category     String?
+  quantity     Int      @default(1)
+  unitPrice    Float?
+  priority     String   @default("MEDIUM")
+  status       String   @default("OPEN")
+  vendor       String?
+  brand        String?
+  packSize     String?
+  availableQty Int      @default(0)
   defaultPrice Float?
-  isActive    Boolean  @default(true)
-  notes       String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  salon       Salon?   @relation(fields: [salonId], references: [id])
-  branch      Branch?  @relation(fields: [branchId], references: [id])
+  isActive     Boolean  @default(true)
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  salon        Salon?   @relation(fields: [salonId], references: [id])
+  branch       Branch?  @relation(fields: [branchId], references: [id])
 }
 
 model FinanceTransaction {
@@ -2437,4 +2439,21 @@ model FinanceTransaction {
   @@index([paymentStatus])
   @@index([paymentFor])
   @@index([paymentDate])
+}
+
+model Blog {
+  id        String   @id @default(uuid())
+  salonId   String
+  salon     Salon    @relation(fields: [salonId], references: [id], onDelete: Cascade)
+  title     String
+  slug      String
+  excerpt   String?
+  content   String   @db.Text
+  imageUrl  String?
+  author    String?
+  published Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([salonId, slug])
 }

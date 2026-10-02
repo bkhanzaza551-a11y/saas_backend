@@ -12,6 +12,7 @@ import ExcelJS from "exceljs";
 import { registerPhase2OwnerRoutes } from "./phase2/index.js";
 import { registerPhase3OwnerRoutes } from "./phase3/index.js";
 import { registerPhase4OwnerRoutes } from "./phase4/index.js";
+import { blogRoutes } from "./phase5/blogs.js";
 import { registerMissingOwnerRoutes } from "./missingOwnerRoutes.js";
 import { getCampaignAudience } from "../../lib/phase3.js";
 import { sendMail } from "../../lib/mailer.js";
@@ -3337,4 +3338,128 @@ ownerRouter.post("/_test-email-templates", async (req, res) => {
   }
 
   res.json({ total: allTemplates.length, sent: results.filter(r => r.status === "sent").length, failed: results.filter(r => r.status === "failed").length, details: results });
+});
+
+ownerRouter.use("/blogs", blogRoutes);
+
+
+// Customer Wallet Management (Deposit, Deduct, Get Balance & Transactions)
+ownerRouter.get("/wallets/:customerId", requireSalonPermission("customers", "view"), async (req, res) => {
+  try {
+    const salonId = req.salonId;
+    const customerId = req.params.customerId;
+    const [wallet, transactions] = await Promise.all([
+      prisma.wallet.upsert({
+        where: { salonId_customerId: { salonId, customerId } },
+        create: { salonId, customerId, balance: 0, totalDeposited: 0, totalUsed: 0 },
+        update: {}
+      }),
+      prisma.walletTransaction.findMany({
+        where: { salonId, customerId },
+        orderBy: { createdAt: "desc" },
+        take: 50
+      })
+    ]);
+    res.json({
+      wallet: {
+        id: wallet.id,
+        balance: Number(wallet.balance || 0),
+        totalDeposited: Number(wallet.totalDeposited || 0),
+        totalUsed: Number(wallet.totalUsed || 0)
+      },
+      transactions: transactions.map(t => ({
+        id: t.id,
+        type: t.type,
+        amount: Number(t.amount || 0),
+        balanceAfter: Number(t.balanceAfter || 0),
+        note: t.note,
+        createdAt: t.createdAt
+      }))
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to load wallet", error: err.message });
+  }
+});
+
+ownerRouter.post("/wallets/:customerId/deposit", requireSalonPermission("customers", "edit"), async (req, res) => {
+  try {
+    const salonId = req.salonId;
+    const customerId = req.params.customerId;
+    const amount = Number(req.body.amount || 0);
+    const note = req.body.note || null;
+    if (amount <= 0) {
+      return res.status(400).json({ message: "Deposit amount must be greater than 0" });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const wallet = await tx.wallet.upsert({
+        where: { salonId_customerId: { salonId, customerId } },
+        create: { salonId, customerId, balance: amount, totalDeposited: amount, totalUsed: 0 },
+        update: {
+          balance: { increment: amount },
+          totalDeposited: { increment: amount }
+        }
+      });
+      const txRow = await tx.walletTransaction.create({
+        data: {
+          salonId,
+          walletId: wallet.id,
+          customerId,
+          type: "DEPOSIT",
+          amount,
+          balanceAfter: Number(wallet.balance),
+          note
+        }
+      });
+      return { wallet, transaction: txRow };
+    });
+
+    res.json({ success: true, message: "Money deposited successfully", wallet: result.wallet });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to deposit money", error: err.message });
+  }
+});
+
+ownerRouter.post("/wallets/:customerId/deduct", requireSalonPermission("customers", "edit"), async (req, res) => {
+  try {
+    const salonId = req.salonId;
+    const customerId = req.params.customerId;
+    const amount = Number(req.body.amount || 0);
+    const note = req.body.note || null;
+    if (amount <= 0) {
+      return res.status(400).json({ message: "Deduct amount must be greater than 0" });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const wallet = await tx.wallet.findUnique({
+        where: { salonId_customerId: { salonId, customerId } }
+      });
+      if (!wallet || Number(wallet.balance) < amount) {
+        throw Object.assign(new Error("Insufficient wallet balance"), { status: 400 });
+      }
+      const updatedWallet = await tx.wallet.update({
+        where: { id: wallet.id },
+        data: {
+          balance: { decrement: amount },
+          totalUsed: { increment: amount }
+        }
+      });
+      const txRow = await tx.walletTransaction.create({
+        data: {
+          salonId,
+          walletId: wallet.id,
+          customerId,
+          type: "DEDUCT",
+          amount,
+          balanceAfter: Number(updatedWallet.balance),
+          note
+        }
+      });
+      return { wallet: updatedWallet, transaction: txRow };
+    });
+
+    res.json({ success: true, message: "Money deducted successfully", wallet: result.wallet });
+  } catch (err) {
+    res.status(err.status || 500).json({ message: err.message || "Failed to deduct money" });
+  }
 });

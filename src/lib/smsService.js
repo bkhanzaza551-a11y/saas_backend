@@ -13,6 +13,13 @@ import { prisma } from "./prisma.js";
 
 const SMS_TIMEOUT_MS = Number(process.env.SMS_TIMEOUT_MS || 10000);
 
+// Keep logs useful without printing full phone numbers.
+const maskPhone = (value) => {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (digits.length <= 4) return "****" + digits;
+  return "*".repeat(digits.length - 4) + digits.slice(-4);
+};
+
 /* ── Twilio ────────────────────────────────────────────────────────── */
 const twilioSend = async ({ to, message, senderId }) => {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -118,7 +125,7 @@ const smsloginSend = async ({ to, message, senderId }) => {
   const apiKey = process.env.SMSLOGIN_API_KEY || "a6c1394e8d00ba6fe1f6";
   const sender = senderId || process.env.SMSLOGIN_SENDER_ID || "SAONST";
   const username = process.env.SMSLOGIN_USERNAME || "SALONEST";
-  const templateId = process.env.SMSLOGIN_TEMPLATE_ID || "1277178729296112165";
+  const templateId = process.env.OTP_SMS_TEMPLATE_ID || process.env.SMSLOGIN_TEMPLATE_ID || "1277178729296112165";
 
   if (!apiKey || !username) {
     throw new Error("SMSLogin credentials missing: set SMSLOGIN_API_KEY and SMSLOGIN_USERNAME");
@@ -230,6 +237,14 @@ export const sendSms = async ({ salonId, to, message, senderId }) => {
     }).catch(() => {});
     return { success: true, ...result };
   } catch (error) {
+    const reason = error?.message || String(error) || "unknown error";
+    // sendSms() resolves instead of throwing, so callers that only attach a .catch()
+    // never see provider failures. Log it here so gateway errors (bad DLT template
+    // id, blocked number, auth failure) are visible in the service logs.
+    console.error(
+      `[SMS] send failed via ${providerName} to ${maskPhone(to)} (salon ${salonId ?? "none"}, template ${process.env.OTP_SMS_TEMPLATE_ID || process.env.SMSLOGIN_TEMPLATE_ID || "default"}):`,
+      reason
+    );
     await prisma.auditLog.create({
       data: {
         salonId,
@@ -237,11 +252,11 @@ export const sendSms = async ({ salonId, to, message, senderId }) => {
         action: "SMS_FAILED",
         entityType: "SMS",
         entityId: null,
-        summary: `SMS failed to ${to}: ${error.message || "unknown error"}`,
-        metadata: { provider: providerName, error: error.message }
+        summary: `SMS failed to ${maskPhone(to)}: ${reason}`,
+        metadata: { provider: providerName, error: reason, to: maskPhone(to) }
       }
     }).catch(() => {});
-    return { success: false, error: error.message || "SMS send failed" };
+    return { success: false, error: reason === "unknown error" ? "SMS send failed" : reason };
   }
 };
 
