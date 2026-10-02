@@ -14,7 +14,7 @@ blogRoutes.get("/", async (req, res) => {
 });
 
 blogRoutes.post("/", async (req, res) => {
-  const { title, excerpt, content, imageUrl, author, published, slug } = req.body;
+  const { title, excerpt, content, imageUrl, images, author, published, slug } = req.body;
   const blogSlug = slug || title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)+/g, "");
   
   const blog = await prisma.blog.create({
@@ -24,7 +24,8 @@ blogRoutes.post("/", async (req, res) => {
       slug: blogSlug,
       excerpt,
       content,
-      imageUrl,
+      imageUrl: imageUrl || (Array.isArray(images) && images.length ? images[0] : null),
+      images: Array.isArray(images) ? images : (imageUrl ? [imageUrl] : []),
       author,
       published: published !== undefined ? published : false
     }
@@ -33,8 +34,14 @@ blogRoutes.post("/", async (req, res) => {
 });
 
 blogRoutes.patch("/:id", async (req, res) => {
-  const { title, excerpt, content, imageUrl, author, published, slug } = req.body;
-  const data = { title, excerpt, content, imageUrl, author, published, slug };
+  const { title, excerpt, content, imageUrl, images, author, published, slug } = req.body;
+  const data = { title, excerpt, content, imageUrl, images, author, published, slug };
+  if (images !== undefined) {
+    data.images = Array.isArray(images) ? images : [];
+    if (!data.imageUrl && data.images.length > 0) {
+      data.imageUrl = data.images[0];
+    }
+  }
   Object.keys(data).forEach(key => data[key] === undefined && delete data[key]);
 
   const blog = await prisma.blog.findFirst({ where: { id: req.params.id, salonId: req.salonId } });

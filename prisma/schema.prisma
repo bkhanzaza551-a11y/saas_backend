@@ -2450,6 +2450,7 @@ model Blog {
   excerpt   String?
   content   String   @db.Text
   imageUrl  String?
+  images    Json?
   author    String?
   published Boolean  @default(false)
   createdAt DateTime @default(now())
